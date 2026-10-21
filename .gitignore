@@ -3,19 +3,33 @@
 __pycache__/
 *.pyc
 .DS_Store
-data/last-search.json
-data/score-one.json
-data/jev-cache.json
-data/laya-cache.json
-data/clef-cache.json
-data/resume-rewrite.md
-data/resume-answers.md
 
-# graft's local graph cache — regenerable, not committed (run `graft build`).
-/graft/
-resumes/overleaf/
-resumes/updated-resume.md
+# Personal data. The repo ships profile/defaults/ and data/defaults/; `hunt seed` copies them into place.
+profile/og-resume.md
 profile/og-resume.md.bak
+profile/linkedin-profile.md
+profile/projects.md
+profile/preferences.json
+profile/search.json
+profile/rubric.json
+profile/models.json
+profile/worth.json
+data/*
+!data/defaults/
+resumes/*
+daily-digest/*
+
+# Local tool caches and personal dev tooling. A fresh clone has no graft.
+/graft/
+.code-review-graph/
+.superpowers/
+.mcp.json
+.claude/settings.json
+.claude/settings.local.json
+.claude/helpers/
+.claude/skills/graft/
+.grok/skills/graft/
+.grok/config.toml
 
 # Brainstorming specs and implementation plans stay local.
 docs/superpowers/

@@ -106,9 +106,9 @@ class WorthTests(unittest.TestCase):
         self.assertEqual(rules["company_words"]["staffing"], ["agency"])
         self.assertEqual(rules["company_words"]["training"], DEFAULT_RULES["company_words"]["training"])
 
-    def test_the_shipped_rules_file_lists_every_rule(self):
-        shipped = json.loads((Path(__file__).resolve().parent.parent / "profile/worth.json").read_text(encoding="utf-8"))
-        self.assertEqual(set(shipped), set(DEFAULT_RULES))
+    def test_the_shipped_rules_file_matches_the_defaults(self):
+        shipped = json.loads((Path(__file__).resolve().parent.parent / "profile/defaults/worth.json").read_text(encoding="utf-8"))
+        self.assertEqual(shipped, DEFAULT_RULES)
 
 
 if __name__ == "__main__":

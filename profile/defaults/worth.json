@@ -1,0 +1,64 @@
+{
+  "company_words": {
+    "staffing": [
+      "staffing",
+      "talent",
+      "recruit",
+      "placement",
+      "manpower",
+      "hr solutions"
+    ],
+    "training": [
+      "academy",
+      "institute",
+      "training",
+      "coaching",
+      "education",
+      "edtech"
+    ],
+    "services": [
+      "consulting",
+      "consultancy",
+      "outsourcing",
+      "it services"
+    ]
+  },
+  "class_verdicts": {
+    "staffing": "skip",
+    "training": "skip",
+    "services": "maybe",
+    "product": "apply",
+    "unknown": "apply"
+  },
+  "remote_only": {
+    "open_when": [
+      "worldwide",
+      "anywhere in the world",
+      "work from anywhere",
+      "global remote"
+    ],
+    "closed_when": [
+      "authorized to work in the us",
+      "authorized to work in the united states",
+      "us work authorization",
+      "us-based",
+      "based in the us",
+      "based in the united states",
+      "w-2",
+      "w2 only",
+      "1099",
+      "must reside in",
+      "must be located in the us",
+      "must live in the us",
+      "us citizen",
+      "green card",
+      "overlap with est",
+      "overlap with pst",
+      "est business hours",
+      "pst business hours"
+    ]
+  },
+  "empty_description_tries": 2,
+  "old_when_found_days": 14,
+  "max_posted_days": 0
+}

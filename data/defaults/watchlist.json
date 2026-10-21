@@ -1,0 +1,22 @@
+[
+  {"company": "Anthropic", "platform": "greenhouse", "slug": "anthropic"},
+  {"company": "Stripe", "platform": "greenhouse", "slug": "stripe"},
+  {"company": "Figma", "platform": "greenhouse", "slug": "figma"},
+  {"company": "Spotify", "platform": "lever", "slug": "spotify"},
+  {"company": "OpenAI", "platform": "ashby", "slug": "openai"},
+  {"company": "Ramp", "platform": "ashby", "slug": "ramp"},
+  {"company": "Linear", "platform": "ashby", "slug": "linear"},
+  {"company": "NVIDIA", "platform": "workday", "tenant": "nvidia", "host": "wd5", "site": "NVIDIAExternalCareerSite"},
+  {"company": "Cisco", "platform": "workday", "tenant": "cisco", "host": "wd5", "site": "Cisco_Careers"},
+  {"company": "Salesforce", "platform": "workday", "tenant": "salesforce", "host": "wd12", "site": "External_Career_Site"},
+  {"company": "Intel", "platform": "workday", "tenant": "intel", "host": "wd1", "site": "External"},
+  {"company": "HP", "platform": "workday", "tenant": "hp", "host": "wd5", "site": "ExternalCareerSite"},
+  {"company": "Adobe", "platform": "workday", "tenant": "adobe", "host": "wd5", "site": "external_experienced"},
+  {"company": "Guidewire", "platform": "workday", "tenant": "guidewire", "host": "wd5", "site": "external"},
+  {"company": "Workday", "platform": "workday", "tenant": "workday", "host": "wd5", "site": "Workday"},
+  {"company": "Citi", "platform": "workday", "tenant": "citi", "host": "wd5", "site": "2"},
+  {"company": "Mastercard", "platform": "workday", "tenant": "mastercard", "host": "wd1", "site": "CorporateCareers"},
+  {"company": "Morgan Stanley", "platform": "workday", "tenant": "ms", "host": "wd5", "site": "External"},
+  {"company": "PwC", "platform": "workday", "tenant": "pwc", "host": "wd3", "site": "Global_Experienced_Careers"},
+  {"company": "Target", "platform": "workday", "tenant": "target", "host": "wd5", "site": "targetcareers"}
+]

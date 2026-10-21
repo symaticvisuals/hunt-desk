@@ -1,0 +1,15 @@
+{
+  "natural_hire_at": 80,
+  "screenout_cap": 75,
+  "plausible_at": 2.5,
+  "missing_platform_penalty": 8,
+  "max_years_without_cap": null,
+  "overlevel_cap": 70,
+  "comp_penalty": 10,
+  "comp": {
+    "min": null,
+    "max": null,
+    "currency": null
+  },
+  "bonuses": []
+}

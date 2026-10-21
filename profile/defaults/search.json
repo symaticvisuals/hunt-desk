@@ -1,0 +1,44 @@
+{
+  "keywords": [],
+  "exclude_title": [
+    "intern",
+    "internship"
+  ],
+  "location": {
+    "mode": "any"
+  },
+  "sources": [
+    "greenhouse",
+    "lever",
+    "ashby",
+    "workday",
+    "arbeitnow",
+    "jobicy",
+    "muse",
+    "himalayas",
+    "adzuna",
+    "jooble",
+    "findwork",
+    "reed",
+    "usajobs",
+    "jobspy"
+  ],
+  "source_options": {
+    "adzuna": {
+      "country": null
+    },
+    "jobspy": {
+      "sites": [
+        "linkedin",
+        "indeed",
+        "glassdoor"
+      ],
+      "location": null,
+      "locations": [],
+      "results_wanted": 15,
+      "hours_old": 48,
+      "fetch_description": true,
+      "remote_countries": []
+    }
+  }
+}

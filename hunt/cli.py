@@ -602,6 +602,17 @@ def cmd_run(root: Path, args: list[str]) -> int:
     return completed.returncode
 
 
+def cmd_seed(root: Path) -> int:
+    from hunt.seed import seed
+
+    copied = seed(root)
+    for path in copied:
+        print(f"created {path}")
+    if not copied:
+        print("Nothing to copy. Your files are already in place.")
+    return 0
+
+
 def cmd_desk(root: Path) -> int:
     try:
         from hunt.desk import HuntApp
@@ -652,6 +663,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_sameness(root)
     if command == "funnel":
         return cmd_funnel(root, argv[2:])
-    print("Commands: search, tick, schedule, batch, sources, last, cleanup, dedupe, classify, setup, overleaf, workflows, run, score, paths, sameness, funnel")
+    if command == "seed":
+        return cmd_seed(root)
+    print("Commands: search, tick, schedule, batch, sources, last, cleanup, dedupe, classify, setup, overleaf, workflows, run, score, paths, sameness, funnel, seed")
     print("Run with no command to open the desk.")
     return 1

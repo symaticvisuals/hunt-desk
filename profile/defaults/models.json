@@ -1,0 +1,45 @@
+{
+  "classifier": "haiku",
+  "steps": {
+    "inventory": {
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "max_tokens": 4000
+    },
+    "rewrite": {
+      "model": "claude-sonnet-5-5",
+      "effort": "high",
+      "max_tokens": 4000
+    },
+    "humanize": {
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "max_tokens": 8000
+    },
+    "fact_check": {
+      "model": "claude-sonnet-5-5",
+      "effort": "medium",
+      "max_tokens": 2000
+    },
+    "preferences": {
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "max_tokens": 1500
+    },
+    "score": {
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "max_tokens": 8000
+    },
+    "tailor": {
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "max_tokens": 16000
+    },
+    "classify": {
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "max_tokens": 2000
+    }
+  }
+}
