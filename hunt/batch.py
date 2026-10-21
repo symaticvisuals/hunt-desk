@@ -14,6 +14,7 @@ from pathlib import Path
 
 from hunt import spend
 from hunt.store import data_lock, read_json, write_json
+from hunt.tailor import RESUME_RULES
 
 BATCHES = "data/batches.json"
 
@@ -23,15 +24,7 @@ SCORE_INSTRUCTIONS = (
     "Return exactly one job: company, role, base_score, penalties (the penalty and bonus ids, comma separated, "
     "empty when none), final_score, and url (the job's url)."
 )
-TAILOR_INSTRUCTIONS = (
-    "Tailor the master resume in the system prompt for the job below. Follow the Apply and Voice rules. "
-    "Use the LinkedIn profile for extra story, and the projects only when the job wants someone who builds product, "
-    "agents, or internal tools. Reorder and reframe lines that are already true so the ones this job cares about come "
-    "first and use the job's words where they honestly fit. Keep every fact. Do not add an employer, title, date, "
-    "number, name, or tool that is not already in the master resume. Return resume_markdown (the whole tailored "
-    "resume in Markdown), changes (one line per thing you moved or reframed, and why), and gaps (requirements in the "
-    "job that the resume cannot honestly claim)."
-)
+TAILOR_INSTRUCTIONS = "Tailor the master resume in the system prompt for the job below.\n\n" + RESUME_RULES
 
 
 class BatchError(Exception):
@@ -71,17 +64,24 @@ def _section(text: str, heading: str) -> str:
     return "\n".join(lines[start:end]).strip()
 
 
-def _context(root: Path) -> str:
-    """The prefix every request shares: rules, rubric, resume, profile, projects. Cached across the batch."""
+def _context(root: Path, kind: str = "score") -> str:
+    """The prefix every request of one kind shares: rules, rubric, resume, profile, projects. Cached across the batch.
+    Tailor requests also carry the humanizer's writing rules; scoring does not pay for them."""
+    from hunt.tailor import humanizer_text, master_text
+
     rules = ""
     claude_md = root / "CLAUDE.md"
     if claude_md.is_file():
         text = claude_md.read_text(encoding="utf-8")
         rules = "\n\n".join(part for part in (_section(text, "## Rubric"), _section(text, "### Apply"), _section(text, "## Voice")) if part)
     parts = [("Rules from CLAUDE.md", rules)]
+    if kind == "tailor":
+        parts.append(("Writing rules (humanizer skill, MIT, Copyright (c) 2025 Siqi Chen)", humanizer_text(root)))
+    rubric = root / "profile/rubric.json"
+    if rubric.is_file():
+        parts.append(("profile/rubric.json", rubric.read_text(encoding="utf-8").strip()))
+    parts.append(("Master resume (profile/og-resume.md)", master_text(root).strip()))
     for title, name in (
-        ("profile/rubric.json", "profile/rubric.json"),
-        ("Master resume (profile/og-resume.md)", "profile/og-resume.md"),
         ("LinkedIn profile (extra story, not a second resume)", "profile/linkedin-profile.md"),
         ("Projects (only when the job wants a builder of product, agents, or internal tools)", "profile/projects.md"),
     ):
@@ -133,7 +133,7 @@ def build_requests(root: Path, kind: str, jobs: list[dict]) -> list[dict]:
     from hunt.tailor import TAILOR_SCHEMA
 
     steps = load_steps(root)
-    context = _context(root)
+    context = _context(root, kind)
     if kind == "score":
         return [_request(kind, job, context, steps["score"], SCORE_INSTRUCTIONS, SCORE_SCHEMA, 2200) for job in jobs]
     return [_request(kind, job, context, steps["tailor"], TAILOR_INSTRUCTIONS, TAILOR_SCHEMA, 6000) for job in jobs]
@@ -311,16 +311,20 @@ def _apply_tailors(root: Path, record: dict, outputs: dict, failed: int) -> str:
 
     made = 0
     flagged = 0
+    warned = 0
     for custom_id, payload in outputs.items():
         result = save_tailored(root, record["jobs"][custom_id], payload)
         if result.code == 0:
             made += 1
             flagged += "Check these numbers" in result.message
+            warned += result.warn
         else:
             failed += 1
     note = f"Batch wrote {made} tailored resumes to resumes/"
     if flagged:
         note += f", {flagged} with numbers to check in notes.md"
+    if warned:
+        note += f", {warned} need a look (⚠)"
     if failed:
         note += f", {failed} failed"
     return note + "."

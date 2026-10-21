@@ -5,9 +5,11 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
 
+import shutil
 from contextlib import contextmanager
+from unittest.mock import patch
 
-from hunt.batch import BatchError, BudgetSpent, open_batches, pending_urls, poll, run_now, submit, submit_scores
+from hunt.batch import BatchError, _context, BudgetSpent, open_batches, pending_urls, poll, run_now, submit, submit_scores
 from hunt.spend import spent
 from hunt.evaluated import read_csv
 from hunt.tailor import tailored_folder
@@ -80,6 +82,9 @@ def _score(job: dict, final: int) -> dict:
 
 class BatchTests(unittest.TestCase):
     def setUp(self):
+        no_tex = patch("hunt.pdf.find_tex", return_value=None)
+        no_tex.start()
+        self.addCleanup(no_tex.stop)
         self.root = _root()
         self.client = FakeClient()
         self.batches = self.client.messages.batches
@@ -119,10 +124,21 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(len(tailor_requests), 2)
         self.assertEqual(pending_urls(self.root), {jobs[0]["url"], jobs[2]["url"]})
 
-        tailored = {"resume_markdown": MASTER + "- Led 2 launches.\n", "changes": ["Moved agents up."], "gaps": ["Banking"]}
+        tailored = {
+            "candidate_level": "mid",
+            "header": {"name": "Ada", "email": "", "phone": "", "location": "", "links": []},
+            "summary": "",
+            "experience": [{"company": "Acme", "title": "Engineer", "location": "", "dates": "", "bullets": [{"text": "Shipped 4 multi-agent systems.", "priority": 1}]}],
+            "projects": [],
+            "education": [],
+            "skills": [],
+            "jd_keywords": [],
+            "changes": ["Moved agents up."],
+            "gaps": ["Banking"],
+        }
         self.batches.finish(tailor_id, [_ok(request["custom_id"], tailored) for request in tailor_requests])
         notes = poll(self.root, client=self.client)
-        self.assertTrue((tailored_folder(self.root, jobs[0]) / "resume.md").exists())
+        self.assertTrue((tailored_folder(self.root, jobs[0]) / "resume.json").exists())
         self.assertIn("Banking", (tailored_folder(self.root, jobs[2]) / "notes.md").read_text())
         self.assertFalse(tailored_folder(self.root, jobs[1]).exists())
         self.assertTrue(any("2 tailored" in note for note in notes))
@@ -234,3 +250,11 @@ class SpendBatchTests(unittest.TestCase):
         result = run_now(self.root, "tailor", _job(1), client=StreamingClient(_billed_message(payload)))
         self.assertEqual(result, payload)
         self.assertAlmostEqual(spent(self.root, "tailor"), 0.008)
+
+
+class HumanizerContextTests(unittest.TestCase):
+    def test_only_tailor_requests_carry_the_humanizer(self):
+        root = _root()
+        shutil.copytree(Path(__file__).resolve().parent.parent / "prompts", root / "prompts")
+        self.assertIn("humanizer skill, MIT", _context(root, "tailor"))
+        self.assertNotIn("humanizer", _context(root, "score"))

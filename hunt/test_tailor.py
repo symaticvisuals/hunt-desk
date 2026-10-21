@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 from hunt.cli import score_one
 from hunt.evaluated import read_csv
-from hunt.tailor import new_numbers, tailor_one, tailored_folder
+from hunt.pdf import Compiled
+from hunt.tailor import new_numbers, resume_flag, save_tailored, tailor_one, tailored_folder
 
 JOB = {
     "company": "OpenAI",
@@ -53,10 +54,46 @@ class Queue:
 
 
 TAILORED = {
-    "resume_markdown": "# Ada\n\n- Shipped 4 multi-agent systems for 50+ customers, built for regulated teams.\n- Built the billing service.\n",
+    "candidate_level": "mid",
+    "header": {"name": "Ada", "email": "ada@example.com", "phone": "", "location": "", "links": []},
+    "summary": "",
+    "experience": [
+        {
+            "company": "Acme",
+            "title": "Engineer",
+            "location": "",
+            "dates": "",
+            "bullets": [
+                {"text": "Shipped 4 multi-agent systems for 50+ customers, built for regulated teams.", "priority": 1},
+                {"text": "Built the billing service.", "priority": 2},
+            ],
+        }
+    ],
+    "projects": [],
+    "education": [],
+    "skills": [],
+    "jd_keywords": ["agents"],
     "changes": ["Moved the multi-agent line to the top because the role is about agents in production."],
     "gaps": ["Financial services domain experience"],
 }
+
+
+def _with_bullet(text: str) -> dict:
+    output = json.loads(json.dumps(TAILORED))
+    output["experience"][0]["bullets"].append({"text": text, "priority": 3})
+    return output
+
+
+def _one_page_pdf(tex: str) -> Compiled:
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    buffer = BytesIO()
+    writer.write(buffer)
+    return Compiled(ok=True, pages=1, pdf=buffer.getvalue())
 
 
 def _score(final: float) -> str:
@@ -68,6 +105,9 @@ class TailorTests(unittest.TestCase):
         patcher = patch("hunt.claude_cli.shutil.which", return_value="/usr/local/bin/claude")
         patcher.start()
         self.addCleanup(patcher.stop)
+        no_tex = patch("hunt.pdf.find_tex", return_value=None)
+        no_tex.start()
+        self.addCleanup(no_tex.stop)
 
     def test_the_tailored_resume_job_and_notes_are_written_beside_each_other(self):
         root = _root()
@@ -75,8 +115,10 @@ class TailorTests(unittest.TestCase):
         folder = tailored_folder(root, JOB)
         self.assertEqual(folder, root / "resumes/openai/forward-deployed-engineer-fde-financial-services")
         self.assertEqual(made.code, 0)
-        self.assertIn("resumes/openai/forward-deployed-engineer-fde-financial-services/resume.md", made.message)
-        self.assertIn("regulated teams", (folder / "resume.md").read_text())
+        self.assertIn("resumes/openai/forward-deployed-engineer-fde-financial-services/resume.tex", made.message)
+        saved = json.loads((folder / "resume.json").read_text())
+        self.assertIn("regulated teams", saved["experience"][0]["bullets"][0]["text"])
+        self.assertIn("regulated teams", (folder / "resume.tex").read_text())
         jd = (folder / "jd.md").read_text()
         self.assertIn("Work with banks", jd)
         self.assertIn("https://jobs.ashbyhq.com/openai/1/application", jd)
@@ -88,7 +130,7 @@ class TailorTests(unittest.TestCase):
     def test_a_number_the_master_resume_does_not_have_is_flagged(self):
         self.assertEqual(new_numbers(MASTER, "Shipped 4 systems for 50+ customers, cut costs 30%."), ["30%"])
         root = _root()
-        made = tailor_one(root, JOB, runner=Queue(_reply(dict(TAILORED, resume_markdown=MASTER + "- Saved 2,000 hours.\n"))))
+        made = tailor_one(root, JOB, runner=Queue(_reply(_with_bullet("Saved 2,000 hours."))))
         self.assertIn("2,000", made.message)
         self.assertIn("2,000", (tailored_folder(root, JOB) / "notes.md").read_text())
 
@@ -98,7 +140,7 @@ class TailorTests(unittest.TestCase):
         scored = score_one(root, JOB, runner=runner)
         self.assertEqual(len(runner.calls), 2)
         self.assertIn("Tailored resume", scored.message)
-        self.assertTrue((tailored_folder(root, JOB) / "resume.md").exists())
+        self.assertTrue((tailored_folder(root, JOB) / "resume.json").exists())
 
     def test_a_score_at_or_below_the_cutoff_is_not_tailored(self):
         root = _root()
@@ -114,3 +156,34 @@ class TailorTests(unittest.TestCase):
         self.assertEqual(scored.code, 0)
         self.assertIn("Tailoring failed", scored.message)
         self.assertEqual(read_csv(root / "data/evaluated-jobs.csv")[0]["final_score"], "88")
+
+
+class LatexTailorTests(unittest.TestCase):
+    def setUp(self):
+        no_tex = patch("hunt.pdf.find_tex", return_value=None)
+        no_tex.start()
+        self.addCleanup(no_tex.stop)
+
+    def test_without_tex_the_json_and_tex_are_kept_and_the_role_is_flagged(self):
+        root = _root()
+        result = save_tailored(root, JOB, TAILORED)
+        folder = tailored_folder(root, JOB)
+        self.assertTrue((folder / "resume.json").exists() and (folder / "resume.tex").exists())
+        self.assertFalse((folder / "resume.pdf").exists())
+        self.assertIn("PDF not built", (folder / "notes.md").read_text(encoding="utf-8"))
+        self.assertTrue(result.warn)
+        self.assertTrue(resume_flag(root, JOB))
+
+    def test_a_built_pdf_records_its_checks(self):
+        root = _root()
+        save_tailored(root, JOB, TAILORED, compile=_one_page_pdf)
+        folder = tailored_folder(root, JOB)
+        saved = json.loads((folder / "ats.json").read_text(encoding="utf-8"))
+        self.assertEqual((saved["pdf"], saved["pages"]), (True, 1))
+        self.assertTrue((folder / "resume.pdf").exists())
+        self.assertIn("## ATS check", (folder / "notes.md").read_text(encoding="utf-8"))
+
+    def test_an_empty_answer_writes_nothing(self):
+        root = _root()
+        self.assertEqual(save_tailored(root, JOB, {"experience": []}).code, 1)
+        self.assertFalse(tailored_folder(root, JOB).exists())
