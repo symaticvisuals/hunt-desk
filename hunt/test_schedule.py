@@ -166,6 +166,15 @@ class TickTests(unittest.TestCase):
         self.assertEqual(result.skipped, "nothing due")
         fetch.assert_not_called()
 
+    def test_an_idle_tick_with_a_key_and_a_budget_still_scores(self):
+        self.tick(collected=_collected(_job(1)))
+        budget = {"classify_usd_per_day": 0.5, "score_usd_per_day": 3.0}
+        (self.root / "profile/preferences.json").write_text(json.dumps({"confirmed": True, "budget": budget}), encoding="utf-8")
+        with patch("hunt.pipeline.score_stage", return_value="") as scored, patch("hunt.pipeline.tailor_stage", return_value=""):
+            result = tick(self.root, {"ANTHROPIC_API_KEY": "sk-ant-x"}, now=NOON + timedelta(minutes=10))
+        self.assertEqual(result.skipped, "nothing due")
+        scored.assert_called_once()
+
     def test_a_held_run_lock_skips_quietly(self):
         with run_lock(self.root):
             result, fetch = self.tick()

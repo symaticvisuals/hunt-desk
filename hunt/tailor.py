@@ -46,6 +46,12 @@ def tailored_folder(root: Path, job: dict) -> Path:
     return root / "resumes" / _slug(job.get("company") or "company") / _slug(job.get("title") or job.get("role") or "role")
 
 
+def is_tailored(root: Path, job: dict) -> bool:
+    """A folder from before the LaTeX output, with only resume.md, counts too. It is never queued again."""
+    folder = tailored_folder(root, job)
+    return (folder / "resume.json").exists() or (folder / "resume.md").exists()
+
+
 def new_numbers(master: str, tailored: str) -> list[str]:
     """Numbers in the tailored resume that the master resume never states."""
     known = {token.rstrip(",.") for token in _NUMBER.findall(master or "")}

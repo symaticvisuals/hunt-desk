@@ -159,6 +159,7 @@ def tick(root: Path, env: dict[str, str], *, now: datetime | None = None, force:
     units = source_units(load_search(root), env)
     due = units if force else due_units(state, units, now)
     if not due:
+        _advance_idle(root, now, env)
         return RunResult(skipped="nothing due")
     try:
         return run(root, env, units=due, now=now, notify=True, **hooks)
@@ -222,6 +223,7 @@ def run(
         _describe(root, report, fetcher=describer)
         _classify(root, now, report, classifier, result, env)
         _check_live(root, now, report, checker)
+        _advance(root, now, report, env, result)
         result.announced = _mark_visible(root, now)
         if result.announced and notify and not first_run:
             send = notifier
@@ -234,6 +236,33 @@ def run(
         report(f"run done: {len(added)} new in inbox, {len(result.announced)} newly worth a look")
     _log(root, lines, now)
     return result
+
+
+def _advance(root: Path, now: datetime, report, env: dict[str, str], result: RunResult) -> None:
+    from hunt import pipeline
+
+    for error in (pipeline.tailor_stage(root, now, report, env), pipeline.score_stage(root, now, report, env)):
+        if error:
+            result.errors.append(error)
+
+
+def _advance_idle(root: Path, now: datetime, env: dict[str, str]) -> None:
+    """Nothing to fetch: still send waiting roles to Claude within the caps."""
+    from hunt import pipeline
+
+    if not pipeline.allowed(root, env):
+        return
+    lines: list[str] = []
+    try:
+        with run_lock(root):
+            pipeline.tailor_stage(root, now, lines.append, env)
+            pipeline.score_stage(root, now, lines.append, env)
+    except Busy:
+        return
+    except Exception as exc:
+        lines.append(f"error pipeline: {type(exc).__name__}: {exc}")
+    if lines:
+        _log(root, lines, now)
 
 
 def _poll_batches(root: Path, now: datetime) -> None:
