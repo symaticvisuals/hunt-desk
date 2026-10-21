@@ -1,9 +1,16 @@
 [project]
 name = "hunt"
 version = "0.1.0"
-description = "Terminal desk for a job search"
+description = "A local job search desk: fetch postings, sort and score them with Claude, and tailor a one-page resume for the best ones"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = ["anthropic", "pypdf", "python-jobspy", "textual>=8.0.0"]
+
+[project.urls]
+Repository = "https://github.com/symaticvisuals/hunt-desk"
+Issues = "https://github.com/symaticvisuals/hunt-desk/issues"
 
 [tool.uv]
 package = false

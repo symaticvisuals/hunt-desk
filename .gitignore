@@ -21,6 +21,7 @@ daily-digest/*
 
 # Local tool caches and personal dev tooling. A fresh clone has no graft.
 /graft/
+.ignore
 .code-review-graph/
 .superpowers/
 .mcp.json

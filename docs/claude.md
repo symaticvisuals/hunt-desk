@@ -2,7 +2,7 @@
 
 Checked against the Claude Code docs on 2026-10-15.
 
-[Dynamic workflows](https://code.claude.com/docs/en/workflows) are JavaScript scripts that fan work out across many subagents. The script itself cannot read the filesystem or run the shell. That is the wrong tool for this daily loop, which is one fetch, one dedupe, and one score. The `ultracode` keyword also does not start a workflow from `claude -p` or from a scheduled prompt. This repo does not ship a `.claude/workflows` script.
+[Dynamic workflows](https://code.claude.com/docs/en/workflows) are JavaScript scripts that fan work out across many subagents. The script itself cannot read the filesystem or run the shell. That is the wrong tool for this daily loop, which is one fetch, one dedupe, and one score. The `ultracode` keyword also does not start a workflow from `claude -p` or from a scheduled prompt. The daily loop has no `.claude/workflows` script. The one script there, `.claude/workflows/resume-rewrite.js`, is the resume rewrite.
 
 | Step | Who holds the plan | What you run |
 |---|---|---|

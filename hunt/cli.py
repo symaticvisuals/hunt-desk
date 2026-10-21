@@ -398,7 +398,7 @@ def cmd_setup(root: Path, args: list[str]) -> int:
         print("Run: uv run python -m hunt setup resume.pdf")
         print("Or an Overleaf URL: uv run python -m hunt setup https://www.overleaf.com/project/<id>")
         print("Add --rewrite to edit weak lines in a .tex file. Push is separate: uv run python -m hunt overleaf push <id>")
-        print("Or open the desk and press ctrl+n.")
+        print("Or open the desk, press r, and choose a file.")
         return 2
     if len(text.strip()) < 80:
         print("That resume is too short to set up from.")
