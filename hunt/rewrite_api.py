@@ -127,7 +127,9 @@ CHECK_SCHEMA = {
 
 
 class RewriteError(Exception):
-    pass
+    def __init__(self, message: str, stat: "CallStat | None" = None) -> None:
+        super().__init__(message)
+        self.stat = stat
 
 
 @dataclass
@@ -327,15 +329,19 @@ class _Runner:
             raise
         except Exception as exc:
             raise RewriteError(_safe_error(step_name, exc)) from exc
-        reason = getattr(message, "stop_reason", None)
-        if reason == "max_tokens":
-            raise RewriteError(f"{step_name} hit max_tokens. Raise that step in profile/models.json.")
-        if reason == "refusal":
-            raise RewriteError(f"Claude refused the {step_name} step.")
-        data = _parse_json(_text(message))
+        # The call is billed whatever happens next, so the usage travels with any error.
         stat = CallStat(step_name, str(getattr(message, "model", None) or step["model"]), *_usage(message))
         with self._lock:
             self.calls.append(stat)
+        reason = getattr(message, "stop_reason", None)
+        if reason == "max_tokens":
+            raise RewriteError(f"{step_name} hit max_tokens. Raise that step in profile/models.json.", stat)
+        if reason == "refusal":
+            raise RewriteError(f"Claude refused the {step_name} step.", stat)
+        try:
+            data = _parse_json(_text(message))
+        except RewriteError as exc:
+            raise RewriteError(str(exc), stat) from exc
         return data, stat
 
 

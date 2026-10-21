@@ -1,8 +1,12 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 from datetime import date, timedelta
 
 from hunt.preferences import compiled_search, normalize
-from hunt.probe import Probe, count_lines, counts
+from hunt.probe import Probe, count_lines, counts, run_probe
 
 TODAY = date(2026, 10, 21)
 
@@ -59,6 +63,18 @@ class ProbeCountTests(unittest.TestCase):
         running = Probe(rows=[], failed=[], roles=["Product Manager"], done=False, at="")
         self.assertEqual(count_lines(running, ["Product Manager"], RULE, [], TODAY, running=True)[-1], "Counting…")
         self.assertEqual(count_lines(Probe(rows=[], failed=[], roles=[], done=True, at=""), ["Product Manager"], RULE, [], TODAY, running=False), [])
+
+
+class ProbeRunTests(unittest.TestCase):
+    def test_a_probe_leaves_the_board_schedule_alone(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "profile").mkdir()
+        (root / "data").mkdir()
+        (root / "profile/search.json").write_text(json.dumps({"keywords": [], "location": {"mode": "any"}, "sources": ["greenhouse"]}), encoding="utf-8")
+        with patch("hunt.search.source_units", return_value=["greenhouse"]), patch("hunt.search._fetch_unit", return_value=([], [])):
+            probe = run_probe(root, {}, {"roles": ["Product Manager"]})
+        self.assertTrue(probe.done)
+        self.assertFalse((root / "data/schedule.json").exists())
 
 
 if __name__ == "__main__":

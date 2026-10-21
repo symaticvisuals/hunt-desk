@@ -1,5 +1,7 @@
 import asyncio
 import json
+
+from textual.widgets import Label
 import os
 import tempfile
 import unittest
@@ -165,7 +167,7 @@ def _local_proposal(root):
     return migrate(root), "Filled locally for the test."
 
 
-def _pilot(root: Path, script, *, key: bool = True) -> None:
+def _pilot(root: Path, script, *, key: bool = True, probe=None) -> None:
     from hunt.desk import HuntApp
     from hunt.probe import Probe
 
@@ -184,7 +186,7 @@ def _pilot(root: Path, script, *, key: bool = True) -> None:
             patch("hunt.launchd.installed", return_value=True),
             patch("hunt.schedule.run", side_effect=RuntimeError("no network in tests")),
             patch("hunt.preferences.propose", side_effect=_local_proposal),
-            patch("hunt.probe.run_probe", return_value=Probe(done=True)),
+            patch("hunt.probe.run_probe", side_effect=probe or (lambda *_args, **_kwargs: Probe(done=True))),
         ):
             asyncio.run(run())
     finally:
@@ -219,6 +221,27 @@ class DeskPilotTests(unittest.TestCase):
 
         async def script(app, pilot):
             self.assertIsInstance(app.screen, KeyStep)
+
+        _pilot(root, script, key=False)
+
+    def test_a_key_that_needs_a_workspace_asks_for_one_after_the_key_step(self):
+        from textual.widgets import Input
+
+        from hunt.claude_client import WorkspaceLookup
+        from hunt.desk import WorkspaceScreen
+
+        root = _root()
+        (root / "profile/og-resume.md").write_text("PLACEHOLDER_RESUME\n", encoding="utf-8")
+
+        async def script(app, pilot):
+            with patch("hunt.claude_client.needs_workspace", return_value=True), patch(
+                "hunt.claude_client.lookup_workspace", return_value=WorkspaceLookup()
+            ):
+                app.screen.query_one("#key-input", Input).value = "sk-ant-test"
+                await pilot.click("#key-save")
+                await _settle(app, pilot)
+                await _settle(app, pilot)
+                self.assertIsInstance(app.screen, WorkspaceScreen)
 
         _pilot(root, script, key=False)
 
@@ -352,6 +375,54 @@ class DeskPilotTests(unittest.TestCase):
             self.assertNotIsInstance(app.screen, PreferencesStep)
 
         _pilot(root, script, key=False)
+
+    def test_saving_during_the_first_count_checks_the_boards_after_it(self):
+        import threading
+        from unittest.mock import Mock
+
+        from hunt.probe import Probe
+
+        root = _root()
+        (root / "profile/preferences.json").unlink()
+        release = threading.Event()
+
+        def slow_probe(*_args, **_kwargs):
+            release.wait(5)
+            return Probe(done=True)
+
+        async def script(app, pilot):
+            app.action_check = Mock()
+            for _ in range(100):
+                await pilot.pause(0.05)
+                if app._probe_running:
+                    break
+            self.assertTrue(app._probe_running)
+            await pilot.click("#save-prefs")
+            await pilot.pause()
+            app.action_check.assert_not_called()
+            release.set()
+            await _settle(app, pilot)
+            await _settle(app, pilot)
+            app.action_check.assert_called_once()
+            self.assertTrue(app._timers_started)
+
+        _pilot(root, script, probe=slow_probe)
+
+    def test_preferences_from_the_list_reuse_the_last_count(self):
+        from unittest.mock import Mock
+
+        root = _root()
+
+        probe = Mock()
+
+        async def script(app, pilot):
+            with patch("hunt.probe.run_probe", probe):
+                await pilot.press("p")
+                for _ in range(3):
+                    await _settle(app, pilot)
+
+        _pilot(root, script)
+        probe.assert_not_called()
 
     def test_the_main_list_dismisses_and_explains_hidden_roles(self):
         from textual.widgets import Static
@@ -556,6 +627,25 @@ class ProcessAllTests(unittest.TestCase):
             self.assertIn("⚠", str(app.query_one("#jobs").get_cell_at((0, 2))))
 
         _pilot(root, script)
+
+    def test_s_without_the_cli_asks_before_passing_the_cap(self):
+        from hunt.steps import ConfirmScreen
+
+        root = self._root_with_six()
+        prefs = json.loads((root / "profile/preferences.json").read_text())
+        prefs["budget"] = {"classify_usd_per_day": 0.5, "score_usd_per_day": 0.01}
+        (root / "profile/preferences.json").write_text(json.dumps(prefs), encoding="utf-8")
+        (root / ".env").write_text("ANTHROPIC_API_KEY=sk-ant-test\n", encoding="utf-8")
+
+        async def script(app, pilot):
+            with patch("shutil.which", return_value=None), patch("hunt.cli.score_one") as scored:
+                await pilot.press("s")
+                await pilot.pause()
+                self.assertIsInstance(app.screen, ConfirmScreen)
+                self.assertIn("budget", str(app.screen.query_one(Label).render()))
+                scored.assert_not_called()
+
+        _pilot(root, script, key=False)
 
     def test_s_queues_once_three_roles_are_scoring(self):
         import threading

@@ -9,7 +9,7 @@ import shutil
 from contextlib import contextmanager
 from unittest.mock import patch
 
-from hunt.batch import BatchError, _context, BudgetSpent, open_batches, pending_urls, poll, run_now, submit, submit_scores
+from hunt.batch import BatchError, _context, failures, BudgetSpent, open_batches, pending_urls, poll, run_now, submit, submit_scores
 from hunt.spend import spent
 from hunt.evaluated import read_csv
 from hunt.tailor import tailored_folder
@@ -234,6 +234,61 @@ class SpendBatchTests(unittest.TestCase):
         self.assertEqual(spent(self.root, "score"), 0.0)
         self.assertEqual(read_csv(self.root / "data/evaluated-jobs.csv"), [])
         self.assertEqual(pending_urls(self.root), set())
+
+    def test_failed_roles_are_remembered_per_kind(self):
+        jobs = [_job(1), _job(2)]
+        batch_id, _ = submit(self.root, "score", jobs, client=self.client)
+        ids = [request["custom_id"] for request in self.batches.created[0][1]]
+        expired = NS(custom_id=ids[0], result=NS(type="expired"))
+        no_row = _billed(ids[1], {"jobs": []})
+        self.batches.finish(batch_id, [expired, no_row])
+        poll(self.root, client=self.client)
+        self.assertEqual(failures(self.root, "score"), {jobs[0]["url"]: 1, jobs[1]["url"]: 1})
+        self.assertEqual(failures(self.root, "tailor"), {})
+
+    def test_a_role_already_in_a_batch_is_not_sent_again(self):
+        submit(self.root, "score", [_job(1)], client=self.client)
+        _batch_id, count = submit(self.root, "score", [_job(1), _job(2)], client=self.client)
+        self.assertEqual(count, 1)
+        self.assertEqual([request["custom_id"] for request in self.batches.created[1][1]], [self.batches.created[1][1][0]["custom_id"]])
+        self.assertNotIn(_job(1)["url"], [job["url"] for job in open_batches(self.root)[1]["jobs"].values()])
+        with self.assertRaises(BatchError):
+            submit(self.root, "score", [_job(2)], client=self.client)
+
+    def test_two_pollers_apply_a_batch_once(self):
+        import threading
+        import time
+
+        job = _job(1)
+        batch_id, _ = submit(self.root, "score", [job], client=self.client)
+        custom_id = self.batches.created[0][1][0]["custom_id"]
+        self.batches.finish(batch_id, [_billed(custom_id, _score(job, 90))])
+        slow = self.batches.results
+
+        def results(batch):
+            time.sleep(0.2)
+            return slow(batch)
+
+        self.batches.results = results
+        notes: list[str] = []
+        threads = [threading.Thread(target=lambda: notes.extend(poll(self.root, client=self.client))) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len([note for note in notes if note.startswith("Batch scored")]), 1)
+        self.assertEqual(len(self.batches.created), 2)
+
+    def test_roles_already_tailored_are_not_tailored_again(self):
+        job = _job(1)
+        folder = tailored_folder(self.root, job)
+        folder.mkdir(parents=True)
+        (folder / "resume.md").write_text("# Ada\n", encoding="utf-8")
+        batch_id, _ = submit(self.root, "score", [job], client=self.client)
+        custom_id = self.batches.created[0][1][0]["custom_id"]
+        self.batches.finish(batch_id, [_billed(custom_id, _score(job, 90))])
+        poll(self.root, client=self.client)
+        self.assertEqual(len(self.batches.created), 1)
 
     def test_tailoring_waits_when_scoring_spent_the_cap(self):
         _budget(self.root, 0.0045)

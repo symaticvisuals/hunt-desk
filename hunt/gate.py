@@ -264,17 +264,22 @@ def haiku_predictor(root: Path, *, client=None):
     def predict(state: str, questions: dict) -> dict:
         if spend.room(root, "classify") <= 0:
             raise GateError(CLASSIFY_SPENT)
+        def bill(stat) -> None:
+            usage = {
+                "input_tokens": stat.input_tokens,
+                "output_tokens": stat.output_tokens,
+                "cache_read_input_tokens": stat.cache_read_tokens,
+                "cache_creation_input_tokens": stat.cache_write_tokens,
+            }
+            spend.record(root, "classify", spend.cost(table, stat.model, usage, batch=False))
+
         try:
             reply, stat = runner.ask_with_stat("classify", step, haiku_system(questions), state, HAIKU_SCHEMA)
         except RewriteError as exc:
+            if exc.stat is not None:
+                bill(exc.stat)
             raise GateError(str(exc)) from exc
-        usage = {
-            "input_tokens": stat.input_tokens,
-            "output_tokens": stat.output_tokens,
-            "cache_read_input_tokens": stat.cache_read_tokens,
-            "cache_creation_input_tokens": stat.cache_write_tokens,
-        }
-        spend.record(root, "classify", spend.cost(table, stat.model, usage, batch=False))
+        bill(stat)
         answers = {"worth_reading": {"noul": 1.0 if reply.get("worth_reading") is True else 0.0}}
         if isinstance(reply.get("fit"), (int, float)):
             answers["fit"] = {"score": float(reply["fit"])}

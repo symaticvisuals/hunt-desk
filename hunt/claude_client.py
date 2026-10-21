@@ -86,6 +86,20 @@ def lookup_workspace(root: Path, *, client=None) -> WorkspaceLookup:
     return WorkspaceLookup(choices=tuple(rows))
 
 
+def needs_workspace(root: Path, *, client=None) -> bool:
+    """True only when this key is refused for lacking a workspace. A free models.list call asks; any other error
+    reads as no, so a workspace-scoped key never sees the workspace prompt."""
+    load_env(root / ".env")
+    if workspace_id():
+        return False
+    try:
+        api = client if client is not None else make_client()
+        api.models.list(limit=1)
+    except Exception as exc:
+        return workspace_required(exc)
+    return False
+
+
 def workspace_required(exc: BaseException) -> bool:
     text = str(exc).lower()
     return "anthropic-workspace-id" in text or "not scoped to a workspace" in text

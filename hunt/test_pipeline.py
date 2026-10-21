@@ -91,6 +91,15 @@ class StageTests(unittest.TestCase):
             self.assertEqual(score_stage(_root(), NOW, lines.append, KEY), "")
         self.assertIn("budget is spent", lines[-1])
 
+    def test_a_role_that_failed_twice_is_not_sent_again(self):
+        lines: list[str] = []
+        job = _job("b", "Beta", 3.0, "2026-10-20")
+        with patch("hunt.batch.submit") as sent, patch("hunt.pipeline._rows", return_value=[(job, "")]), patch(
+            "hunt.batch.failures", return_value={job["url"]: 2}
+        ):
+            score_stage(_root(), NOW, lines.append, KEY)
+        sent.assert_not_called()
+
     def test_waiting_reasons(self):
         job = _job("w", "Acme", 3.0, "2026-10-20")
         self.assertEqual(shown_reason(job, "not classified yet", {job["url"]}, 0.5), "waiting: batch")

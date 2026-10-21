@@ -249,7 +249,8 @@ def migrate(root: Path) -> dict:
     if location.get("mode") == "remote_only":
         raw["work_modes"] = ["remote"]
     prefs = normalize(raw)
-    write_json(root / PREFERENCES, prefs)
+    # The caps count as saved only when the person saves them, so migration leaves them out of the file.
+    write_json(root / PREFERENCES, {key: value for key, value in prefs.items() if key != "budget"})
     return prefs
 
 

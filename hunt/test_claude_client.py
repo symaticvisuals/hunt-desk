@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hunt.claude_client import client_options, lookup_workspace, store_workspace_id, workspace_required
+from hunt.claude_client import client_options, lookup_workspace, needs_workspace, store_workspace_id, workspace_required
 
 
 class Workspace:
@@ -81,3 +81,46 @@ class WorkspaceTests(unittest.TestCase):
             os.environ.pop(name, None)
         else:
             os.environ[name] = value
+
+
+class ModelsClient:
+    """Answers models.list, or raises what the API says for a key with no workspace."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.calls = 0
+        outer = self
+
+        class Models:
+            def list(self, **kwargs):
+                outer.calls += 1
+                if error is not None:
+                    raise error
+                return []
+
+        self.models = Models()
+
+
+class NeedsWorkspaceTests(unittest.TestCase):
+    def setUp(self):
+        self.saved = os.environ.pop("ANTHROPIC_WORKSPACE_ID", None)
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        os.environ.pop("ANTHROPIC_WORKSPACE_ID", None)
+        if self.saved is not None:
+            os.environ["ANTHROPIC_WORKSPACE_ID"] = self.saved
+
+    def test_only_a_key_without_a_workspace_needs_one(self):
+        root = Path(tempfile.mkdtemp())
+        unscoped = ModelsClient(RuntimeError("This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header"))
+        self.assertTrue(needs_workspace(root, client=unscoped))
+        self.assertFalse(needs_workspace(root, client=ModelsClient()))
+        self.assertFalse(needs_workspace(root, client=ModelsClient(RuntimeError("overloaded"))))
+
+    def test_a_saved_workspace_skips_the_check(self):
+        root = Path(tempfile.mkdtemp())
+        os.environ["ANTHROPIC_WORKSPACE_ID"] = "wrkspc_1"
+        client = ModelsClient(RuntimeError("not scoped to a workspace"))
+        self.assertFalse(needs_workspace(root, client=client))
+        self.assertEqual(client.calls, 0)
+

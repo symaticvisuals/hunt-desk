@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -37,12 +36,11 @@ def _save(root: Path, probe: Probe) -> None:
 
 
 def run_probe(root: Path, env: dict[str, str], prefs: dict, *, on_unit=None, now: datetime | None = None) -> Probe:
-    """Fetch every unit once and record it in the schedule, so the first real check skips what was just fetched.
-    Raises store.Busy when a check is already running."""
+    """Fetch every unit once without the title filter. The board schedule is left alone, so the next real check still
+    fetches everything new since its last run. Raises store.Busy when a check is already running."""
     from hunt.preferences import compiled_search, normalize
-    from hunt.schedule import SCHEDULE, Outcome, load_state, next_state
-    from hunt.search import UnitOutcome, _fetch_unit, load_search, load_watchlist, source_units
-    from hunt.store import data_lock, run_lock
+    from hunt.search import _fetch_unit, load_search, load_watchlist, source_units
+    from hunt.store import run_lock
 
     now = now or datetime.now().astimezone()
     prefs = normalize(prefs)
@@ -51,7 +49,6 @@ def run_probe(root: Path, env: dict[str, str], prefs: dict, *, on_unit=None, now
     units = source_units(search, env)
     watchlist = load_watchlist(root)
     probe = Probe(roles=list(prefs["roles"]), at=now.isoformat())
-    rng = random.Random()
 
     def fetch(unit: str) -> tuple[str, list, list[str]]:
         try:
@@ -66,13 +63,8 @@ def run_probe(root: Path, env: dict[str, str], prefs: dict, *, on_unit=None, now
             for future in as_completed([pool.submit(fetch, unit) for unit in units]):
                 unit, jobs, errors = future.result()
                 probe.rows.extend(job.as_dict() for job in jobs)
-                outcome = UnitOutcome(found=len(jobs), errors=errors)
                 if errors and not jobs:
                     probe.failed.append(unit)
-                with data_lock(root):
-                    state = load_state(root)
-                    state["units"][unit] = next_state(unit, state["units"].get(unit) or {}, Outcome(0, outcome.blocked, "; ".join(errors)[:300]), now, rng)
-                    write_json(root / SCHEDULE, state)
                 _save(root, probe)
                 if on_unit:
                     on_unit(unit, not (errors and not jobs))

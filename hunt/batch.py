@@ -160,6 +160,11 @@ def submit(root: Path, kind: str, jobs: list[dict], *, client=None, enforce: boo
     unique = _unique(jobs)
     if not unique:
         raise BatchError("No roles to send.")
+    # A tick and the desk can both reach here with the same roles; a role already in a batch is not paid for twice.
+    waiting = pending_urls(root)
+    unique = [job for job in unique if (job.get("url") or "") not in waiting]
+    if not unique:
+        raise BatchError("These roles are already in a batch.")
     requests = build_requests(root, kind, unique)
     table = spend.prices(root)
     token, count = spend.reserve(root, kind, [_estimate(table, request, batch=True) for request in requests], enforce=enforce)
@@ -246,55 +251,97 @@ def poll(root: Path, *, client=None) -> list[str]:
     notes: list[str] = []
     for record in waiting:
         batch = api.messages.batches.retrieve(record["id"])
-        if batch.processing_status != "ended":
+        if batch.processing_status != "ended" or not _set_status(root, record["id"], "open", "applying"):
             continue
-        outputs: dict[str, dict] = {}
-        billed = 0.0
-        table = spend.prices(root)
-        for item in api.messages.batches.results(record["id"]):
-            result = getattr(item, "result", None)
-            if getattr(result, "type", None) == "succeeded":
-                message = result.message
-                billed += spend.cost(table, str(getattr(message, "model", "") or ""), usage_of(message), batch=True)
-            if item.custom_id in record["jobs"]:
-                payload = _payload(item)
-                if payload is not None:
-                    outputs[item.custom_id] = payload
-        spend.settle(root, record["id"], billed)
-        # Errored, refused, expired, or missing from the results.
-        failed = len(record["jobs"]) - len(outputs)
-        note = _apply_scores(root, record, outputs, failed, api) if record["kind"] == "score" else _apply_tailors(root, record, outputs, failed)
-        with data_lock(root):
-            records = _load(root)
-            for stored in records:
-                if stored.get("id") == record["id"]:
-                    stored["status"] = "done"
-                    stored["summary"] = note
-            write_json(root / BATCHES, records)
-        notes.append(note)
+        try:
+            notes.append(_apply(root, record, api))
+        except Exception as exc:
+            _set_status(root, record["id"], "applying", "open")
+            notes.append(f"Batch {record['id']} could not be applied yet: {type(exc).__name__}: {exc}")
     return notes
 
 
-def _apply_scores(root: Path, record: dict, outputs: dict, failed: int, api) -> str:
+def _set_status(root: Path, batch_id: str, current: str, new: str) -> bool:
+    """Move a batch from one status to the next under the lock. False when another poller got there first."""
+    with data_lock(root):
+        records = _load(root)
+        stored = next((item for item in records if item.get("id") == batch_id), None)
+        if stored is None or stored.get("status") != current:
+            return False
+        stored["status"] = new
+        write_json(root / BATCHES, records)
+    return True
+
+
+def _apply(root: Path, record: dict, api) -> str:
+    """Settle what the batch cost, then write its results. The caller holds the claim."""
+    outputs: dict[str, dict] = {}
+    billed = 0.0
+    table = spend.prices(root)
+    for item in api.messages.batches.results(record["id"]):
+        result = getattr(item, "result", None)
+        if getattr(result, "type", None) == "succeeded":
+            message = result.message
+            billed += spend.cost(table, str(getattr(message, "model", "") or ""), usage_of(message), batch=True)
+        if item.custom_id in record["jobs"]:
+            payload = _payload(item)
+            if payload is not None:
+                outputs[item.custom_id] = payload
+    spend.settle(root, record["id"], billed)
+    # Errored, refused, expired, or missing from the results.
+    missing = [record["jobs"][custom_id].get("url") or "" for custom_id in record["jobs"] if custom_id not in outputs]
+    if record["kind"] == "score":
+        note, failed = _apply_scores(root, record, outputs, missing, api)
+    else:
+        note, failed = _apply_tailors(root, record, outputs, missing)
+    with data_lock(root):
+        records = _load(root)
+        for stored in records:
+            if stored.get("id") == record["id"]:
+                stored["status"] = "done"
+                stored["summary"] = note
+                stored["failed_urls"] = failed
+        write_json(root / BATCHES, records)
+    return note
+
+
+def failures(root: Path, kind: str) -> dict[str, int]:
+    """How many finished batches of this kind failed each role. Billed failures must not repeat forever."""
+    counts: dict[str, int] = {}
+    for record in _load(root):
+        if record.get("kind") != kind or record.get("status") != "done":
+            continue
+        for url in record.get("failed_urls") or []:
+            if url:
+                counts[url] = counts.get(url, 0) + 1
+    return counts
+
+
+def _apply_scores(root: Path, record: dict, outputs: dict, missing: list[str], api) -> tuple[str, list[str]]:
     from hunt.cli import record_score, screenout_cap
 
     cutoff = screenout_cap(root)
     high: list[dict] = []
     scored = 0
+    failed_urls = list(missing)
     for custom_id, payload in outputs.items():
         job = record["jobs"][custom_id]
         rows = payload.get("jobs") or []
         row = next((item for item in rows if item.get("url") == job.get("url")), rows[0] if rows else None)
         if row is None:
-            failed += 1
+            failed_urls.append(job.get("url") or "")
             continue
         record_score(root, job, row)
         scored += 1
         if float(row["final_score"]) > cutoff:
             high.append(job)
+    from hunt.tailor import is_tailored
+
     note = f"Batch scored {scored} roles: {len(high)} above {cutoff:g}"
-    if failed:
-        note += f", {failed} failed"
+    waiting = pending_urls(root)
+    high = [job for job in high if not is_tailored(root, job) and (job.get("url") or "") not in waiting]
+    if failed_urls:
+        note += f", {len(failed_urls)} failed"
     if high:
         try:
             submit(root, "tailor", high, client=api)
@@ -303,28 +350,30 @@ def _apply_scores(root: Path, record: dict, outputs: dict, failed: int, api) -> 
             note += ". Tailoring waits for tomorrow's budget."
         except BatchError as exc:
             note += f". Tailoring did not start: {exc}"
-    return note + ("" if note.endswith(".") else ".")
+    return note + ("" if note.endswith(".") else "."), failed_urls
 
 
-def _apply_tailors(root: Path, record: dict, outputs: dict, failed: int) -> str:
+def _apply_tailors(root: Path, record: dict, outputs: dict, missing: list[str]) -> tuple[str, list[str]]:
     from hunt.tailor import save_tailored
 
     made = 0
     flagged = 0
     warned = 0
+    failed_urls = list(missing)
     for custom_id, payload in outputs.items():
-        result = save_tailored(root, record["jobs"][custom_id], payload)
+        job = record["jobs"][custom_id]
+        result = save_tailored(root, job, payload)
         if result.code == 0:
             made += 1
             flagged += "Check these numbers" in result.message
             warned += result.warn
         else:
-            failed += 1
+            failed_urls.append(job.get("url") or "")
     note = f"Batch wrote {made} tailored resumes to resumes/"
     if flagged:
         note += f", {flagged} with numbers to check in notes.md"
     if warned:
         note += f", {warned} need a look (⚠)"
-    if failed:
-        note += f", {failed} failed"
-    return note + "."
+    if failed_urls:
+        note += f", {len(failed_urls)} failed"
+    return note + ".", failed_urls

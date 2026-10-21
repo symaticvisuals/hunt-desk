@@ -8,6 +8,9 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+# A role whose batch request failed this many times is billed no more; the person can still press s.
+MAX_ATTEMPTS = 2
+
 
 def key_in(env: dict[str, str]) -> bool:
     return (env.get("ANTHROPIC_API_KEY") or "").strip().startswith("sk-ant-")
@@ -58,6 +61,13 @@ def tailor_queue(root: Path, rows: list[tuple[dict, str]], cutoff: float, waitin
     return ready
 
 
+def _skip(root: Path, kind: str) -> set[str]:
+    """Roles already in a batch, and roles whose batches failed MAX_ATTEMPTS times."""
+    from hunt.batch import failures, pending_urls
+
+    return pending_urls(root) | {url for url, count in failures(root, kind).items() if count >= MAX_ATTEMPTS}
+
+
 def _send(root: Path, kind: str, jobs: list[dict], report) -> str:
     from hunt.batch import BatchError, BudgetSpent, submit
 
@@ -78,19 +88,17 @@ def _send(root: Path, kind: str, jobs: list[dict], report) -> str:
 def tailor_stage(root: Path, now: datetime, report, env: dict[str, str]) -> str:
     if not allowed(root, env):
         return ""
-    from hunt.batch import pending_urls
     from hunt.cli import screenout_cap
 
-    return _send(root, "tailor", tailor_queue(root, _rows(root, now), screenout_cap(root), pending_urls(root)), report)
+    return _send(root, "tailor", tailor_queue(root, _rows(root, now), screenout_cap(root), _skip(root, "tailor")), report)
 
 
 def score_stage(root: Path, now: datetime, report, env: dict[str, str]) -> str:
     if not allowed(root, env):
         return ""
-    from hunt.batch import pending_urls
     from hunt.screen import context
 
-    return _send(root, "score", score_queue(_rows(root, now), context(root, now.date()), pending_urls(root)), report)
+    return _send(root, "score", score_queue(_rows(root, now), context(root, now.date()), _skip(root, "score")), report)
 
 
 def shown_reason(job: dict, reason: str, in_batch: set[str], classify_room: float) -> str:

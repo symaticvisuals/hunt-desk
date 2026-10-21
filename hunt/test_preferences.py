@@ -87,6 +87,13 @@ class PreferenceFileTests(unittest.TestCase):
         self.assertTrue(load(root)["confirmed"])
         self.assertEqual(load(root)["budget"], {"classify_usd_per_day": 0.2, "score_usd_per_day": 1.0})
 
+    def test_migrate_does_not_count_as_saving_the_caps(self):
+        root = _root()
+        (root / "profile/preferences.json").unlink(missing_ok=True)
+        migrate(root)
+        self.assertFalse(budget_set(root))
+        self.assertEqual(load(root)["budget"], DEFAULT_BUDGET)
+
     def test_normalize_drops_unknown_values(self):
         prefs = normalize({"seniority": ["senior", "wizard"], "work_modes": ["remote", "space"], "company_size": "huge", "max_years": "7"})
         self.assertEqual(prefs["seniority"], ["senior"])

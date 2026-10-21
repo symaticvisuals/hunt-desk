@@ -562,6 +562,9 @@ class HuntApp(App):
         self.hire_at = 80
         self._busy = False
         self._key_asked = False
+        self._probe_running = False
+        self._after_probe = None
+        self._timers_started = False
         self._ctx = None
         self._warned_rules = False
         self._scoring: dict[str, dict] = {}
@@ -597,26 +600,78 @@ class HuntApp(App):
 
         if not self._key_asked and needs_onboarding(self.root) and not anthropic_key_present(self.root):
             self._key_asked = True
-            self.push_screen(KeyStep(self.root), lambda _saved: self.next_step())
+            self.push_screen(KeyStep(self.root), self._key_step_done)
             return
         if needs_onboarding(self.root):
             self.push_screen(ResumeStep(self.root, can_leave=False), self._resume_done)
             return
         if not is_confirmed(self.root):
             migrate(self.root)
-            self.push_screen(PreferencesStep(self.root, can_leave=False), self._preferences_done)
+            self.push_screen(PreferencesStep(self.root, can_leave=False, auto_probe=True), self._preferences_done)
             return
         if not budget_set(self.root):
             self.push_screen(BudgetScreen(self.root), lambda _saved: self.next_step())
             return
         self.reload()
         self._classify_open()
+        self._start_timers()
+
+    def _start_timers(self) -> None:
+        if self._timers_started:
+            return
+        self._timers_started = True
         self.set_interval(60, self._poll_batches)
         self.set_interval(REFRESH_SECONDS, self._refresh_if_changed)
 
+    def start_probe(self, prefs: dict) -> None:
+        """Step 2's count. Runs on the app, so saving Step 2 does not cut it short."""
+        self._probe_running = True
+
+        def work() -> None:
+            from hunt.probe import run_probe
+            from hunt.store import Busy
+
+            try:
+                run_probe(self.root, _env(self.root), prefs, on_unit=lambda unit, ok: self.call_from_thread(self._probe_progress))
+            except Busy:
+                self.call_from_thread(self.notify, "A check is running. Counts appear after the next one.")
+            except Exception as exc:
+                self.call_from_thread(self.notify, f"Counting stopped: {type(exc).__name__}: {exc}", severity="warning")
+            self.call_from_thread(self._probe_finished)
+
+        self.run_worker(work, thread=True, group="probe", exclusive=False)
+
+    def _probe_progress(self) -> None:
+        if isinstance(self.screen, PreferencesStep):
+            self.screen._refresh_counts()
+
+    def _probe_finished(self) -> None:
+        self._probe_running = False
+        self._probe_progress()
+        if self._after_probe is not None:
+            then, self._after_probe = self._after_probe, None
+            then()
+
+    def _key_step_done(self, saved: bool | None) -> None:
+        """A key that is refused without a workspace gets one now, or every background call would fail quietly."""
+        if not saved:
+            self.next_step()
+            return
+
+        def work() -> None:
+            from hunt.claude_client import needs_workspace
+
+            try:
+                needed = needs_workspace(self.root)
+            except Exception:
+                needed = False
+            self.call_from_thread(self.ensure_workspace if needed else (lambda then: then()), self.next_step)
+
+        self.run_worker(work, thread=True, group="key", exclusive=False)
+
     def _resume_done(self, saved: bool | None) -> None:
         if saved:
-            self.push_screen(PreferencesStep(self.root, can_leave=False), self._preferences_done)
+            self.push_screen(PreferencesStep(self.root, can_leave=False, auto_probe=True), self._preferences_done)
             return
         self.next_step()
 
@@ -624,6 +679,13 @@ class HuntApp(App):
         if not saved:
             self.next_step()
             return
+        if self._probe_running:
+            self._after_probe = self._after_preferences
+            self.notify("Preferences saved. The boards are checked as soon as the count finishes.")
+            return
+        self._after_preferences()
+
+    def _after_preferences(self) -> None:
         from datetime import datetime
 
         from hunt.launchd import install, installed
@@ -631,6 +693,7 @@ class HuntApp(App):
 
         added = merge_saved(self.root, datetime.now().astimezone())
         self.reload()
+        self._start_timers()
         if not installed(self.root):
             try:
                 install(self.root)
@@ -1104,8 +1167,6 @@ class HuntApp(App):
             self.notify(note, timeout=10)
 
     def _score_job(self, job: dict, *, force: bool, quiet: bool = False) -> None:
-        from hunt.cli import SCORE_WORKERS
-
         url = job.get("url") or ""
         if url in self._scoring or self._queued(job) or url in self._in_batch:
             if not quiet:
@@ -1119,6 +1180,37 @@ class HuntApp(App):
                 if not quiet:
                     self.notify(f"{reason}. Open the role and press S to score with Claude anyway.")
                 return
+        over = None if quiet else self._api_cost_over_cap(job)
+        if over:
+            self.push_screen(
+                ConfirmScreen(
+                    "This goes past today's score and resume budget.",
+                    over + " Without the claude CLI, scoring and any resume it triggers go through the Claude API at full price.",
+                    "Score anyway",
+                    "Cancel",
+                ),
+                lambda yes: self._enqueue_or_start(job, force, quiet) if yes else None,
+            )
+            return
+        self._enqueue_or_start(job, force, quiet)
+
+    def _api_cost_over_cap(self, job: dict) -> str:
+        """Empty unless s would bill the API (no claude CLI) beyond today's room. Then the line that says by how much."""
+        import shutil
+
+        from hunt import spend
+        from hunt.batch import estimate_now
+        from hunt.tailor import api_key_ready
+
+        if shutil.which("claude") is not None or not api_key_ready(self.root):
+            return ""
+        cost = estimate_now(self.root, "score", job) + estimate_now(self.root, "tailor", job)
+        left = spend.room(self.root, "score")
+        return f"Up to ${cost:.2f} with ${left:.2f} left today." if cost > left else ""
+
+    def _enqueue_or_start(self, job: dict, force: bool, quiet: bool) -> None:
+        from hunt.cli import SCORE_WORKERS
+
         if len(self._scoring) >= SCORE_WORKERS:
             self._queue.append((job, force))
             if not quiet:

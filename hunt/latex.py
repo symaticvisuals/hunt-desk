@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 
 TEMPLATE = Path(__file__).resolve().parent.parent / "templates/jake.tex"
@@ -37,11 +38,23 @@ _SPECIAL = {
 _GUARD = "\\ifdefined\\pdfgentounicode\n  \\input{glyphtounicode}\n  \\pdfgentounicode=1\n\\fi"
 
 
+# Latin-1, Latin Extended-A and -B, and Latin Extended Additional (Vietnamese). Names in these scripts are kept.
+_LATIN = ((0x20, 0x7E), (0xA0, 0x24F), (0x1E00, 0x1EFF))
+
+
+def _settable(ch: str) -> bool:
+    if ch in " \t\n\r\u00a0":
+        return True
+    if unicodedata.category(ch) in {"Cc", "Cf", "Cs", "Co", "So"}:
+        return False
+    return any(low <= ord(ch) <= high for low, high in _LATIN)
+
+
 def plain(text: str) -> str:
-    out = str(text or "")
+    out = unicodedata.normalize("NFC", str(text or ""))
     for old, new in _MAP:
         out = out.replace(old, new)
-    out = "".join(ch for ch in out if ord(ch) <= 0xFF)
+    out = "".join(ch for ch in out if _settable(ch))
     return re.sub(r"\s+", " ", out).strip()
 
 

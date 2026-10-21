@@ -317,13 +317,13 @@ class HaikuTests(unittest.TestCase):
 class BilledHaikuClient:
     """Answers every classify call with a plausible match and a fixed usage."""
 
-    def __init__(self) -> None:
+    def __init__(self, stop_reason: str = "end_turn") -> None:
         self.calls = []
         usage = type("Usage", (), {"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0})
         message = type("Message", (), {})()
         message.content = [type("Block", (), {"type": "text", "text": json.dumps({"worth_reading": True, "fit": 3})})()]
         message.model = "claude-haiku-5-5"
-        message.stop_reason = "end_turn"
+        message.stop_reason = stop_reason
         message.usage = usage()
         outer = self
 
@@ -365,6 +365,12 @@ class HaikuBudgetTests(unittest.TestCase):
     def test_each_haiku_call_is_billed(self):
         root = _with_budget(_haiku_root(), 0.5)
         evaluate(root, self.JOB, predictor=haiku_predictor(root, client=BilledHaikuClient()))
+        self.assertAlmostEqual(spent(root, "classify"), 0.00015)
+
+    def test_a_billed_but_unusable_reply_still_counts(self):
+        root = _with_budget(_haiku_root(), 0.5)
+        with self.assertRaises(GateError):
+            evaluate(root, self.JOB, predictor=haiku_predictor(root, client=BilledHaikuClient(stop_reason="max_tokens")))
         self.assertAlmostEqual(spent(root, "classify"), 0.00015)
 
     def test_clef_falls_back_to_haiku_only_with_a_key_and_no_ollama(self):

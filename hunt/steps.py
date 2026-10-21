@@ -185,12 +185,12 @@ class ResumeStep(ModalScreen[bool]):
 class PreferencesStep(ModalScreen[bool]):
     """Step 2. Claude proposes from the resume; the person edits and saves."""
 
-    def __init__(self, root: Path, *, can_leave: bool) -> None:
+    def __init__(self, root: Path, *, can_leave: bool, auto_probe: bool = False) -> None:
         super().__init__()
         self._root = root
         self._can_leave = can_leave
+        self._auto_probe = auto_probe
         self._adjacent: list[str] = []
-        self._probing = False
         self._recount = None
 
     def compose(self) -> ComposeResult:
@@ -251,32 +251,11 @@ class PreferencesStep(ModalScreen[bool]):
         self._adjacent = list(prefs.get("adjacent") or [])
         self.query_one("#prefs-note", Static).update(note)
         self.query_one("#save-prefs", Button).disabled = False
-        self._start_probe()
-
-    def _env(self) -> dict[str, str]:
-        load_env(self._root / ".env")
-        return dict(os.environ)
-
-    def _start_probe(self) -> None:
-        self._probing = True
-        self._refresh_counts()
-        self.run_worker(self._probe_worker, thread=True, group="probe")
-
-    def _probe_worker(self) -> None:
-        from hunt.probe import run_probe
-        from hunt.store import Busy
-
-        try:
-            run_probe(self._root, self._env(), self._form_prefs(), on_unit=lambda unit, ok: self.app.call_from_thread(self._refresh_counts))
-        except Busy:
-            self.app.call_from_thread(self.notify, "A check is running. Counts appear after the next one.")
-        except Exception as exc:
-            self.app.call_from_thread(self.notify, f"Counting stopped: {type(exc).__name__}: {exc}", severity="warning")
-        self.app.call_from_thread(self._probe_done)
-
-    def _probe_done(self) -> None:
-        self._probing = False
-        self._refresh_counts()
+        # Onboarding probes the boards once; opening preferences later reuses that count.
+        if self._auto_probe:
+            self.app.start_probe(self._form_prefs())
+        else:
+            self._refresh_counts()
 
     def _refresh_counts(self) -> None:
         from datetime import date
@@ -291,7 +270,8 @@ class PreferencesStep(ModalScreen[bool]):
             rule = compiled_search(prefs, load_search(self._root))
         except Exception:
             return
-        lines = count_lines(load_probe(self._root), prefs["roles"], rule, self._adjacent, date.today(), running=self._probing)
+        running = bool(getattr(self.app, "_probe_running", False))
+        lines = count_lines(load_probe(self._root), prefs["roles"], rule, self._adjacent, date.today(), running=running)
         self.query_one("#prefs-counts", Static).update("\n".join(lines))
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:

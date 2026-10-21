@@ -21,6 +21,28 @@ class EscapeTests(unittest.TestCase):
         self.assertEqual(escape("Grew ARR 3× → $2M — fast 😀"), r"Grew ARR 3x to \$2M, fast")
         self.assertEqual(escape("“one-tap” user’s 漢字 flow"), "\"one-tap\" user's flow")
 
+    def test_latin_extended_names_survive_and_control_characters_do_not(self):
+        self.assertEqual(escape("Łukasz Dvořák · İstanbul · Nguyễn · Şahin"), "Łukasz Dvořák · İstanbul · Nguyễn · Şahin")
+        self.assertEqual(escape("Jose\u0301"), "José")
+        self.assertEqual(escape("a\x85b"), "ab")
+
+    def test_latin_extended_names_build_into_the_pdf(self):
+        from hunt.ats import pdf_text
+        from hunt.pdf import compile_tex, find_tex
+
+        if find_tex() is None:
+            self.skipTest("no TeX engine on this machine")
+        resume = {
+            "candidate_level": "entry",
+            "header": {"name": "Łukasz Dvořák", "email": "l@x.io", "phone": "+48 600 100 200 3"},
+            "experience": [{"company": "Nguyễn & Şahin", "title": "Analyst", "dates": "2024", "bullets": [{"text": "Built İstanbul reports.", "priority": 1}]}],
+        }
+        compiled = compile_tex(render(resume))
+        self.assertTrue(compiled.ok, compiled.log_tail)
+        text = pdf_text(compiled.pdf)
+        for word in ("Łukasz", "Dvořák", "Şahin", "İstanbul"):
+            self.assertIn(word, text)
+
     def test_specials_are_escaped_in_text_and_urls(self):
         self.assertEqual(escape("R&D 100% #1 a_b {x} ~ ^"), r"R\&D 100\% \#1 a\_b \{x\} \textasciitilde{} \textasciicircum{}")
         self.assertEqual(escape("C:\\temp"), r"C:\textbackslash{}temp")
