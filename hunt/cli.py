@@ -602,6 +602,25 @@ def cmd_run(root: Path, args: list[str]) -> int:
     return completed.returncode
 
 
+def cmd_tex_check(root: Path) -> int:
+    from hunt.latex import render
+    from hunt.pdf import NoTeX, compile_tex, find_tex
+
+    sample = json.loads((root / "hunt/testdata/sample-resume.json").read_text(encoding="utf-8"))
+    try:
+        compiled = compile_tex(render(sample))
+    except NoTeX as exc:
+        print(exc)
+        return 1
+    engine = (find_tex() or ("TeX", ""))[0]
+    if not compiled.ok:
+        print(f"{engine} could not compile the sample:")
+        print(compiled.log_tail)
+        return 1
+    print(f"{engine} works: the sample compiles to {compiled.pages} page(s).")
+    return 0
+
+
 def cmd_seed(root: Path) -> int:
     from hunt.seed import seed
 
@@ -665,6 +684,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_funnel(root, argv[2:])
     if command == "seed":
         return cmd_seed(root)
-    print("Commands: search, tick, schedule, batch, sources, last, cleanup, dedupe, classify, setup, overleaf, workflows, run, score, paths, sameness, funnel, seed")
+    if command == "tex-check":
+        return cmd_tex_check(root)
+    print("Commands: search, tick, schedule, batch, sources, last, cleanup, dedupe, classify, setup, overleaf, workflows, run, score, paths, sameness, funnel, seed, tex-check")
     print("Run with no command to open the desk.")
     return 1
