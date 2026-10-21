@@ -72,6 +72,29 @@ class JobSpyTests(unittest.TestCase):
             )
         self.assertFalse(scrape.call_args.kwargs["fetch_description"])
 
+    def test_boards_verify_tls_against_certifi(self):
+        import certifi
+
+        with patch("hunt.sources._scrape_jobspy", return_value=(Frame([]), [])) as scrape:
+            fetch_jobspy({"keywords": ["engineer"], "location": {"mode": "any"}, "source_options": {}}, {})
+        self.assertEqual(scrape.call_args.kwargs["ca_cert"], certifi.where())
+
+    def test_one_site_can_override_the_shared_options(self):
+        options = {
+            "results_wanted": 40,
+            "site_options": {"linkedin": {"results_wanted": 10, "fetch_description": False}},
+        }
+        for site, wanted, describe in (("linkedin", 10, False), ("indeed", 40, True)):
+            search = {
+                "keywords": ["engineer"],
+                "location": {"mode": "any"},
+                "source_options": {"jobspy": {**options, "sites": [site]}},
+            }
+            with patch("hunt.sources._scrape_jobspy", return_value=(Frame([]), [])) as scrape:
+                fetch_jobspy(search, {})
+            self.assertEqual(scrape.call_args.kwargs["results_wanted"], wanted, site)
+            self.assertEqual(scrape.call_args.kwargs["fetch_description"], describe, site)
+
     def test_the_board_experience_range_reaches_the_years_screen(self):
         from hunt.trim import years_stated
 

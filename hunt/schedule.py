@@ -86,13 +86,19 @@ def next_state(unit: str, state: dict, outcome: Outcome, now: datetime, rng: ran
     return updated
 
 
-def jobspy_window(state: dict, now: datetime) -> int:
+def jobspy_window(state: dict, now: datetime, cap: int = 168) -> int:
     """Hours of postings to ask JobSpy for: since the last clean run, plus two hours of overlap."""
     last = _parse(state.get("last_clean_run"))
     if last is None:
-        return 48
+        return min(48, cap)
     hours = math.ceil(max(0.0, (now - last).total_seconds()) / 3600) + 2
-    return max(6, min(168, hours))
+    return max(6, min(cap, hours))
+
+
+def window_cap(root: Path) -> int:
+    """A board blocked for days would otherwise ask for postings older than max_posted_days, which the desk hides."""
+    days = int((read_json(root / "profile/worth.json", {}) or {}).get("max_posted_days") or 0)
+    return (days + 1) * 24 if days > 0 else 168
 
 
 def _clock(text: str) -> time:
@@ -200,7 +206,8 @@ def run(
         state = load_state(root)
         first_run = not state["units"]
         chosen = source_units(load_search(root), env) if full or units is None else list(units)
-        windows = {unit: jobspy_window(state["units"].get(unit) or {}, now) for unit in chosen if unit.startswith("jobspy:")}
+        cap = window_cap(root)
+        windows = {unit: jobspy_window(state["units"].get(unit) or {}, now, cap) for unit in chosen if unit.startswith("jobspy:")}
         found = collect(root, env, on_progress=report, units=None if full else chosen, windows=windows)
         added = merge_into_inbox(root, [job.as_dict() for job in found.matches], now)
         if full:

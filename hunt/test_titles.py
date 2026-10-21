@@ -21,6 +21,11 @@ YES = [
     ("Solutions Engineer", "Senior Solution Engineer"),
     ("Machine Learning Engineer", "Senior ML Engineer"),
     ("Backend Engineer", "Back-End Developer"),
+    ("AI Engineer", "LLM Engineer"),
+    ("AI Engineer", "Agent Engineer"),
+    ("AI Engineer", "Software Engineer, Agents"),
+    ("AI Engineer", "Agentic Workflows Developer"),
+    ("Agentic Systems Engineer", "Agent Systems Engineer"),
 ]
 NO = [
     ("AI Engineer", "Senior Software Engineer, Security Platform"),
@@ -30,6 +35,8 @@ NO = [
     ("Software Engineer", "Account Executive"),
     ("Software Engineer", "Platform Engineer"),
     ("LLM Application Engineer", "Applications Engineer"),
+    ("AI Engineer", "Customer Support Agent"),
+    ("LLM Application Engineer", "AI Application Engineer"),
 ]
 
 

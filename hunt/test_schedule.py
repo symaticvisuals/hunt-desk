@@ -14,6 +14,7 @@ from hunt.schedule import (
     load_state,
     next_state,
     tick,
+    window_cap,
 )
 from hunt.search import SearchResult, UnitOutcome
 from hunt.sources import Job
@@ -72,6 +73,18 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(jobspy_window({"last_clean_run": (NOON - timedelta(hours=4, minutes=10)).isoformat()}, NOON), 7)
         self.assertEqual(jobspy_window({"last_clean_run": (NOON - timedelta(minutes=30)).isoformat()}, NOON), 6)
         self.assertEqual(jobspy_window({"last_clean_run": (NOON - timedelta(days=10)).isoformat()}, NOON), 168)
+
+    def test_a_blocked_board_never_asks_for_postings_the_desk_would_hide(self):
+        stale = {"last_clean_run": (NOON - timedelta(days=10)).isoformat()}
+        self.assertEqual(jobspy_window(stale, NOON, cap=72), 72)
+        self.assertEqual(jobspy_window({}, NOON, cap=24), 24)
+        root = Path(tempfile.mkdtemp())
+        self.assertEqual(window_cap(root), 168)
+        (root / "profile").mkdir()
+        (root / "profile/worth.json").write_text(json.dumps({"max_posted_days": 2}), encoding="utf-8")
+        self.assertEqual(window_cap(root), 72)
+        (root / "profile/worth.json").write_text(json.dumps({"max_posted_days": 0}), encoding="utf-8")
+        self.assertEqual(window_cap(root), 168)
 
     def test_quiet_hours_cross_midnight(self):
         quiet = {"start": "23:00", "end": "07:00"}

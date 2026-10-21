@@ -438,22 +438,36 @@ def fetch_arbeitnow(_search: dict, _env: dict[str, str]) -> list[Job]:
     return jobs
 
 
+JOBICY_PAGE = 100
+JOBICY_PAGES = 3
+
+
 def fetch_jobicy(_search: dict, _env: dict[str, str]) -> list[Job]:
-    payload = get_json("https://jobicy.com/api/v2/remote-jobs?count=20", label="jobicy")
+    """Remote roles, newest first. A page of 100 covers about eight hours, so a few pages cover a day."""
     jobs: list[Job] = []
-    for item in payload.get("jobs") or []:
-        jobs.append(
-            Job(
-                company=item.get("companyName") or "",
-                title=item.get("jobTitle") or "",
-                url=item.get("url") or "",
-                platform="jobicy",
-                job_id=str(item.get("id") or ""),
-                location=_location(item.get("jobGeo") or "", remote=True),
-                description=html_to_text(item.get("jobDescription") or item.get("jobExcerpt") or ""),
-                source="jobicy",
+    cursor = ""
+    for _page in range(JOBICY_PAGES):
+        query = {"count": JOBICY_PAGE, **({"cursor": cursor} if cursor else {})}
+        payload = get_json(f"https://jobicy.com/api/v2/remote-jobs?{urllib.parse.urlencode(query)}", label="jobicy")
+        for item in payload.get("jobs") or []:
+            jobs.append(
+                _mark(
+                    Job(
+                        company=item.get("companyName") or "",
+                        title=item.get("jobTitle") or "",
+                        url=item.get("url") or "",
+                        platform="jobicy",
+                        job_id=str(item.get("id") or ""),
+                        location=_location(item.get("jobGeo") or "", remote=True),
+                        description=html_to_text(item.get("jobDescription") or item.get("jobExcerpt") or ""),
+                        source="jobicy",
+                    ),
+                    posted=item.get("pubDate"),
+                )
             )
-        )
+        cursor = payload.get("nextCursor") or ""
+        if not payload.get("hasMore") or not cursor:
+            break
     return jobs
 
 
@@ -480,25 +494,47 @@ def fetch_muse(_search: dict, _env: dict[str, str]) -> list[Job]:
     return jobs
 
 
-def fetch_himalayas(_search: dict, _env: dict[str, str]) -> list[Job]:
-    payload = get_json("https://himalayas.app/jobs/api?limit=20", label="himalayas")
-    jobs: list[Job] = []
-    for item in payload.get("jobs") or []:
-        restrictions = item.get("locationRestrictions") or []
-        place = "; ".join(restrictions) if isinstance(restrictions, list) else str(restrictions)
-        jobs.append(
-            Job(
-                company=item.get("companyName") or "",
-                title=item.get("title") or "",
-                url=item.get("applicationLink") or "",
-                platform="himalayas",
-                job_id=str(item.get("guid") or ""),
-                location=_location(place, remote=True),
-                description=html_to_text(item.get("description") or item.get("excerpt") or ""),
-                source="himalayas",
-            )
-        )
-    return jobs
+HIMALAYAS_PAGE = 20
+HIMALAYAS_PAGES = 2
+
+
+def fetch_himalayas(search: dict, _env: dict[str, str]) -> list[Job]:
+    """The feed adds thousands of roles a day, so each keyword is searched, newest first, in each country the person can work from."""
+    keywords = _search_keywords(search)
+    if not keywords:
+        return [_himalayas_job(item) for item in get_json("https://himalayas.app/jobs/api?limit=20", label="himalayas").get("jobs") or []]
+    countries = _target_countries(search) or [""]
+    found: dict[str, Job] = {}
+    for keyword in keywords:
+        for country in countries:
+            for page in range(1, HIMALAYAS_PAGES + 1):
+                query = {"q": keyword, "sort": "recent", "page": page, **({"country": country} if country else {})}
+                payload = get_json(f"https://himalayas.app/jobs/api/search?{urllib.parse.urlencode(query)}", label="himalayas")
+                items = payload.get("jobs") or []
+                for item in items:
+                    job = _himalayas_job(item)
+                    found.setdefault(job.job_id or job.url, job)
+                if len(items) < HIMALAYAS_PAGE:
+                    break
+    return list(found.values())
+
+
+def _himalayas_job(item: dict) -> Job:
+    restrictions = item.get("locationRestrictions") or []
+    place = "; ".join(restrictions) if isinstance(restrictions, list) else str(restrictions)
+    return _mark(
+        Job(
+            company=item.get("companyName") or "",
+            title=item.get("title") or "",
+            url=item.get("applicationLink") or "",
+            platform="himalayas",
+            job_id=str(item.get("guid") or ""),
+            location=_location(place, remote=True),
+            description=html_to_text(item.get("description") or item.get("excerpt") or ""),
+            source="himalayas",
+        ),
+        posted=item.get("pubDate"),
+    )
 
 
 def fetch_adzuna(search: dict, env: dict[str, str]) -> list[Job]:
@@ -506,61 +542,74 @@ def fetch_adzuna(search: dict, env: dict[str, str]) -> list[Job]:
     country = options.get("country")
     if not country:
         raise SourceError("set source_options.adzuna.country in profile/search.json")
-    keywords = " ".join((search.get("keywords") or [])[:6])
-    query = urllib.parse.urlencode(
-        {
-            "app_id": env["ADZUNA_APP_ID"],
-            "app_key": env["ADZUNA_APP_KEY"],
-            "results_per_page": 20,
-            "what": keywords,
-        }
-    )
-    payload = get_json(
-        f"https://api.adzuna.com/v1/api/jobs/{urllib.parse.quote(str(country))}/search/1?{query}",
-        label="adzuna",
-    )
     jobs: list[Job] = []
-    for item in payload.get("results") or []:
-        company = item.get("company") or {}
-        location = item.get("location") or {}
-        jobs.append(
-            Job(
-                company=company.get("display_name") or "",
-                title=item.get("title") or "",
-                url=item.get("redirect_url") or "",
-                platform="adzuna",
-                job_id=str(item.get("id") or ""),
-                location=_location(location.get("display_name") or ""),
-                description=html_to_text(item.get("description") or ""),
-                source="adzuna",
-            )
+    # Adzuna requires every word in `what`, so the roles are searched one at a time.
+    for keyword in _search_keywords(search):
+        query = urllib.parse.urlencode(
+            {
+                "app_id": env["ADZUNA_APP_ID"],
+                "app_key": env["ADZUNA_APP_KEY"],
+                "results_per_page": 20,
+                "what": keyword,
+                "sort_by": "date",
+            }
         )
+        payload = get_json(
+            f"https://api.adzuna.com/v1/api/jobs/{urllib.parse.quote(str(country))}/search/1?{query}",
+            label="adzuna",
+        )
+        for item in payload.get("results") or []:
+            company = item.get("company") or {}
+            location = item.get("location") or {}
+            jobs.append(
+                _mark(
+                    Job(
+                        company=company.get("display_name") or "",
+                        title=item.get("title") or "",
+                        url=item.get("redirect_url") or "",
+                        platform="adzuna",
+                        job_id=str(item.get("id") or ""),
+                        location=_location(location.get("display_name") or ""),
+                        description=html_to_text(item.get("description") or ""),
+                        source="adzuna",
+                    ),
+                    posted=item.get("created"),
+                )
+            )
     return jobs
 
 
 def fetch_jooble(search: dict, env: dict[str, str]) -> list[Job]:
-    keywords = " ".join((search.get("keywords") or [])[:6])
-    payload = get_json(
-        f"https://jooble.org/api/{urllib.parse.quote(env['JOOBLE_API_KEY'])}",
-        label="jooble",
-        method="POST",
-        body={"keywords": keywords, "page": 1},
-    )
     jobs: list[Job] = []
-    for item in payload.get("jobs") or []:
-        jobs.append(
-            Job(
-                company=item.get("company") or "",
-                title=item.get("title") or "",
-                url=item.get("link") or "",
-                platform="jooble",
-                job_id=str(item.get("id") or ""),
-                location=_location(item.get("location") or ""),
-                description=html_to_text(item.get("snippet") or ""),
-                source="jooble",
+    for keyword in _search_keywords(search):
+        for country in _target_countries(search) or [""]:
+            payload = get_json(
+                f"https://jooble.org/api/{urllib.parse.quote(env['JOOBLE_API_KEY'])}",
+                label="jooble",
+                method="POST",
+                body={"keywords": keyword, "location": country, "page": 1},
             )
-        )
+            for item in payload.get("jobs") or []:
+                jobs.append(
+                    _mark(
+                        Job(
+                            company=item.get("company") or "",
+                            title=item.get("title") or "",
+                            url=item.get("link") or "",
+                            platform="jooble",
+                            job_id=str(item.get("id") or ""),
+                            location=_location(item.get("location") or ""),
+                            description=html_to_text(item.get("snippet") or ""),
+                            source="jooble",
+                        ),
+                        posted=item.get("updated"),
+                    )
+                )
     return jobs
+
+
+def _search_keywords(search: dict) -> list[str]:
+    return [str(word).strip() for word in search.get("keywords") or [] if str(word).strip()]
 
 
 def fetch_findwork(search: dict, env: dict[str, str]) -> list[Job]:
@@ -648,10 +697,185 @@ def fetch_usajobs(search: dict, env: dict[str, str]) -> list[Job]:
     return jobs
 
 
+FREEHIRE_API = "https://freehire.me/api/v1/jobs/search"
+FREEHIRE_PAGE = 100
+FREEHIRE_PAGES = 5
+FREEHIRE_DAYS = 3
+# freehire's query language takes at most five OR alternatives.
+FREEHIRE_ALTERNATIVES = 5
+_FREEHIRE_JOB_TYPES = {"full_time": "fulltime", "part_time": "parttime", "contract": "contract", "internship": "internship"}
+COUNTRY_NAMES = {
+    "AE": "United Arab Emirates", "AR": "Argentina", "AT": "Austria", "AU": "Australia", "BD": "Bangladesh",
+    "BE": "Belgium", "BR": "Brazil", "CA": "Canada", "CH": "Switzerland", "CL": "Chile", "CN": "China",
+    "CO": "Colombia", "CZ": "Czech Republic", "DE": "Germany", "DK": "Denmark", "EE": "Estonia", "EG": "Egypt",
+    "ES": "Spain", "FI": "Finland", "FR": "France", "GB": "United Kingdom", "GR": "Greece", "HK": "Hong Kong",
+    "HU": "Hungary", "ID": "Indonesia", "IE": "Ireland", "IL": "Israel", "IN": "India", "IT": "Italy",
+    "JP": "Japan", "KE": "Kenya", "KR": "South Korea", "LK": "Sri Lanka", "LT": "Lithuania", "LV": "Latvia",
+    "MX": "Mexico", "MY": "Malaysia", "NG": "Nigeria", "NL": "Netherlands", "NO": "Norway", "NP": "Nepal",
+    "NZ": "New Zealand", "PE": "Peru", "PH": "Philippines", "PK": "Pakistan", "PL": "Poland", "PT": "Portugal",
+    "QA": "Qatar", "RO": "Romania", "SA": "Saudi Arabia", "SE": "Sweden", "SG": "Singapore", "TH": "Thailand",
+    "TR": "Turkey", "TW": "Taiwan", "UA": "Ukraine", "US": "United States", "VN": "Vietnam", "ZA": "South Africa",
+}
+_COUNTRY_CODE = {name.lower(): code for code, name in COUNTRY_NAMES.items()} | {
+    "usa": "US", "u.s.": "US", "u.s.a.": "US", "united states of america": "US", "uk": "GB", "u.k.": "GB",
+    "great britain": "GB", "england": "GB", "uae": "AE", "czechia": "CZ", "türkiye": "TR", "korea": "KR",
+}
+
+
+def freehire_queries(keywords: list[str]) -> list[str]:
+    """One title search per role. hunt still checks every title against the roles itself."""
+    from hunt.titles import search_phrases
+
+    queries: list[str] = []
+    for role in keywords:
+        phrases = search_phrases(str(role))[:FREEHIRE_ALTERNATIVES]
+        query = " OR ".join(f'title:"{phrase}"' for phrase in phrases)
+        if query and query not in queries:
+            queries.append(query)
+    return queries
+
+
+def freehire_places(search: dict) -> list[dict[str, str]]:
+    """freehire ORs every place in a search, so home countries and remote-only countries are searched apart."""
+    from hunt.preferences import WORK_MODES
+
+    rule = search.get("location") or {}
+    mode = rule.get("mode") or "any"
+    if mode == "any":
+        return [{}]
+    if mode == "remote_only":
+        return [{"work_mode": "remote"}]
+    home = _freehire_codes(rule.get("countries"), search)
+    if mode == "countries":
+        return [{"countries": home}] if home else []
+    modes = [str(name) for name in rule.get("work_modes") or WORK_MODES]
+    cities = [str(city).strip() for city in rule.get("cities") or [] if str(city).strip()]
+    places: list[dict[str, str]] = []
+    place = {"countries": home} if home else {"cities": ",".join(cities)} if cities else None
+    if place is not None:
+        # A work-mode filter drops postings with no stated mode, so send one only when it narrows.
+        if set(modes) != set(WORK_MODES):
+            place["work_mode"] = ",".join(modes)
+        places.append(place)
+    remote = _freehire_codes(rule.get("remote_only_countries"), search)
+    if remote and "remote" in modes:
+        places.append({"countries": remote, "work_mode": "remote"})
+    return places
+
+
+def _freehire_codes(names, search: dict) -> str:
+    options = (search.get("source_options") or {}).get("freehire") or {}
+    overrides = {str(name).strip().lower(): str(code).strip().upper() for name, code in (options.get("country_codes") or {}).items()}
+    codes: list[str] = []
+    unknown: list[str] = []
+    for name in names or []:
+        key = str(name).strip().lower()
+        if not key:
+            continue
+        code = overrides.get(key) or _COUNTRY_CODE.get(key) or (key.upper() if key.upper() in COUNTRY_NAMES else "")
+        if code:
+            codes.append(code)
+        else:
+            unknown.append(str(name).strip())
+    if unknown:
+        raise SourceError(f"no country code for {', '.join(unknown)}: add it to source_options.freehire.country_codes in profile/search.json")
+    return ",".join(dict.fromkeys(codes))
+
+
+def fetch_freehire(search: dict, _env: dict[str, str]) -> list[Job]:
+    """Postings freehire.me crawled from company hiring boards, first seen in the last few days. No key."""
+    options = (search.get("source_options") or {}).get("freehire") or {}
+    days = int(options.get("open_within_days") or FREEHIRE_DAYS)
+    queries = freehire_queries(search.get("keywords") or [])
+    if not queries:
+        raise SourceError("freehire needs keywords in profile/search.json")
+    found: dict[str, Job] = {}
+    for place in freehire_places(search):
+        for query in queries:
+            for page in range(FREEHIRE_PAGES):
+                params = {
+                    "q": query,
+                    **place,
+                    "open_within_days": days,
+                    "reality_exclude": "likely-evergreen",
+                    "sort": "created_at",
+                    "limit": FREEHIRE_PAGE,
+                    "offset": page * FREEHIRE_PAGE,
+                }
+                payload = get_json(f"{FREEHIRE_API}?{urllib.parse.urlencode(params)}", label="freehire")
+                rows = (payload.get("data") if isinstance(payload, dict) else None) or []
+                for item in rows:
+                    job = _freehire_job(item)
+                    if job.url:
+                        found.setdefault(job.url, job)
+                if len(rows) < FREEHIRE_PAGE:
+                    break
+    return list(found.values())
+
+
+def _freehire_job(item: dict) -> Job:
+    """The posting keeps its hiring board's platform, board, and id, so it dedupes with the same posting fetched directly."""
+    enrichment = item.get("enrichment") or {}
+    platform = str(item.get("source") or "").lower() or "freehire"
+    board, _, ident = str(item.get("external_id") or "").partition(":")
+    if platform == "workday":
+        board, ident = board.split(".", 1)[0], ident.rsplit("_", 1)[-1]
+    url = _untracked(item.get("url") or "")
+    place = item.get("location") or ""
+    countries = [COUNTRY_NAMES.get(str(code).upper(), str(code).upper()) for code in item.get("countries") or []]
+    size = str(enrichment.get("company_size") or "")
+    dates = [stamp for stamp in (item.get("posted_at"), item.get("created_at")) if stamp]
+    return _mark(
+        Job(
+            company=item.get("company") or "",
+            title=item.get("title") or "",
+            url=url,
+            platform=platform,
+            job_id=ident or board,
+            location=_location(place, *[name for name in countries if name.lower() not in place.lower()], remote=item.get("work_mode") == "remote"),
+            description=_freehire_text(item.get("description") or "", enrichment),
+            source="freehire",
+            board=board if ident else "",
+            pay_min=_amount(enrichment.get("salary_min")),
+            pay_max=_amount(enrichment.get("salary_max")),
+            pay_currency=str(enrichment.get("salary_currency") or ""),
+            pay_interval=str(enrichment.get("salary_period") or ""),
+            job_type=_FREEHIRE_JOB_TYPES.get(str(enrichment.get("employment_type") or ""), ""),
+            work_mode=str(item.get("work_mode") or ""),
+        ),
+        apply=url,
+        # A board that restates its date on every crawl looks newer than the day freehire first saw the posting.
+        posted=min(dates) if dates else "",
+        big=size == "1000+",
+        size_known=bool(size),
+    )
+
+
+def _freehire_text(description: str, enrichment: dict) -> str:
+    """Search results cut the posting short, so the years and requirements freehire read from it are added."""
+    text = html_to_text(description)
+    years = enrichment.get("experience_years_min")
+    if isinstance(years, (int, float)) and not isinstance(years, bool):
+        text = f"Experience: {int(years)}+ years. {text}"
+    needs = [str(need.get("text") or "").strip() for need in enrichment.get("requirements") or [] if isinstance(need, dict)]
+    needs = [need for need in needs if need]
+    if needs:
+        text = f"{text} Requirements: {'; '.join(needs)}."
+    return text.strip()
+
+
+def _untracked(url: str) -> str:
+    parts = urllib.parse.urlsplit(url)
+    query = [(key, value) for key, value in urllib.parse.parse_qsl(parts.query, keep_blank_values=True) if not key.lower().startswith("utm_")]
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
+
+
 def fetch_jobspy(search: dict, env: dict[str, str], on_progress=None) -> list[Job]:
     """Job boards through python-jobspy. One request per keyword and city."""
     options = (search.get("source_options") or {}).get("jobspy") or {}
     sites = jobspy_sites(search)
+    if len(sites) == 1:
+        options = {**options, **((options.get("site_options") or {}).get(sites[0]) or {})}
     term = str(options.get("search_term") or "").strip()
     keywords = [term] if term else [str(word).strip() for word in (search.get("keywords") or []) if str(word).strip()]
     keywords = keywords[:4]
@@ -666,6 +890,7 @@ def fetch_jobspy(search: dict, env: dict[str, str], on_progress=None) -> list[Jo
     hours = int(options.get("hours_old") or 48)
     describe = options.get("fetch_description", True) is not False
     proxies = [part.strip() for part in (env.get("JOBSPY_PROXIES") or "").split(",") if part.strip()]
+    ca_cert = _ca_bundle()
     report = on_progress or (lambda _line: None)
     found: list[Job] = []
     seen: set[str] = set()
@@ -697,6 +922,8 @@ def fetch_jobspy(search: dict, env: dict[str, str], on_progress=None) -> list[Jo
                 kwargs["country_indeed"] = place_country
             if proxies:
                 kwargs["proxies"] = proxies
+            if ca_cert:
+                kwargs["ca_cert"] = ca_cert
             try:
                 frame, logged = _scrape_jobspy(**kwargs)
             except Exception as exc:
@@ -744,6 +971,15 @@ def fetch_jobspy(search: dict, env: dict[str, str], on_progress=None) -> list[Jo
     if not found and errors:
         raise SourceError("jobspy " + "; ".join(errors)[:300])
     return found
+
+
+def _ca_bundle() -> str:
+    """curl_cffi (Naukri, Glassdoor) otherwise trusts the macOS bundle, which lacks newer roots such as GlobalSign R46."""
+    try:
+        import certifi
+    except ImportError:
+        return ""
+    return certifi.where()
 
 
 def jobspy_sites(search: dict) -> list[str]:
@@ -873,6 +1109,7 @@ SPECS: dict[str, SourceSpec] = {
     "findwork": SourceSpec("findwork", env=("FINDWORK_API_KEY",)),
     "reed": SourceSpec("reed", env=("REED_API_KEY",)),
     "usajobs": SourceSpec("usajobs", env=("USAJOBS_API_KEY", "USAJOBS_EMAIL")),
+    "freehire": SourceSpec("freehire"),
     "jobspy": SourceSpec("jobspy"),
 }
 
@@ -893,6 +1130,7 @@ FEED_FETCH = {
     "findwork": fetch_findwork,
     "reed": fetch_reed,
     "usajobs": fetch_usajobs,
+    "freehire": fetch_freehire,
     "jobspy": fetch_jobspy,
 }
 

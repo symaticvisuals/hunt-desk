@@ -56,7 +56,7 @@ Each board is its own unit. JobSpy is split by site, so a LinkedIn block never d
 - Three empty runs in a row lengthen it by half, up to the slowest.
 - A block (HTTP 429, 403, or 406, a captcha, a network error, or failures with no rows) waits base × 2ⁿ, at most 24 hours. One clean run resets it. Rows that arrived before the block are kept.
 - Each next run moves by up to 10% either way.
-- JobSpy asks only for postings since that board's last clean run, plus two hours of overlap (6 to 168 hours; 48 on the first run).
+- JobSpy asks only for postings since that board's last clean run, plus two hours of overlap (6 to 168 hours; 48 on the first run). The window never goes past `max_posted_days` in `profile/worth.json` plus a day, so a board that was blocked for days does not spend its results on postings the desk hides.
 
 `hunt search` and Check now in the desk run every board at once, ignore quiet hours, and also write `data/last-search.json`.
 
