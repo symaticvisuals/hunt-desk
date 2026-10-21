@@ -1,6 +1,6 @@
 # Schedule
 
-The scraper runs in the background through launchd on macOS. Turn it on from the desk (Settings, or the prompt after saving preferences), or from a terminal:
+The scraper runs in the background through launchd on macOS. Saving preferences in Step 2 turns it on. Turn it off or on again from Settings, or from a terminal:
 
 ```sh
 uv run python -m hunt schedule install
@@ -17,14 +17,17 @@ uv run python -m hunt schedule uninstall
 3. Picks the boards that are due. Exits when none are.
 4. Fetches them and appends new roles to `data/inbox.json`. Nothing is ever removed from the inbox; old roles are hidden as stale instead.
 5. Fetches the posting text, up to 30 a tick, for Greenhouse and Workday roles that came without it and could still reach the list. A role whose text is still empty after two tries is hidden as "no description".
-6. Classifies new roles with the classifier in `profile/models.json`: Clef-flash by default, or Haiku. If Ollama is down (Clef-flash) or the Claude API fails (Haiku), the roles wait as "not classified yet" and the next tick retries.
+6. Classifies new roles with the classifier in `profile/models.json`: Haiku for a fresh clone, or Clef-flash. With Clef-flash selected and Ollama down, a key sends them to Haiku instead. Haiku stops for the day at the sorting cap; the rest wait as `waiting: budget`. If the Claude API fails, the roles wait as "not classified yet" and the next tick retries.
 7. Checks up to 30 shortlisted postings a tick, each at most once a day, and hides closed ones.
-8. Records each board's result in `data/schedule.json` and writes a line per board to `data/schedule.log` (last 500 lines).
-9. Sends a macOS notification when a role reaches the main list for the first time. The very first run after install does not notify.
+8. Sends roles above the cutoff that have no resume yet to a tailoring batch, then sends unscored roles on the main list to a scoring batch: clean roles first, then roles marked `?`, by classifier fit, then newest. Both stay inside the scoring cap.
+9. Records each board's result in `data/schedule.json` and writes a line per board to `data/schedule.log` (last 500 lines).
+10. Sends a macOS notification when a role reaches the main list for the first time. The very first run after install does not notify.
+
+A tick with no board due still does step 8.
 
 Every tick outside quiet hours also checks `data/batches.json`. A finished Batch API batch is applied at once (scores written, the tailoring batch sent, or tailored resumes written), even when no board is due, and a notification says what happened.
 
-A tick never runs a Claude score. With Haiku selected, it calls the Claude API to classify new roles, at about $0.0003 a role. `data/schedule.out` catches anything launchd itself prints, such as a crash.
+A tick calls Claude only within the daily caps in `profile/preferences.json`, and never before those caps have been saved once. With both caps at 0, a tick never calls Claude. Spend is kept in `data/spend.json`. `data/schedule.out` catches anything launchd itself prints, such as a crash.
 
 ## Parallel work
 
