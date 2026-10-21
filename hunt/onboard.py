@@ -18,8 +18,9 @@ _ROLE = re.compile(
     re.IGNORECASE,
 )
 _ENGINEERING = re.compile(r"\b(engineer|developer|programmer)\b", re.IGNORECASE)
+# "2019 - 2021", and "Jul 2019 – Dec 2021" with a month name before the end year.
 _RANGE = re.compile(
-    r"\b(19\d{2}|20\d{2})\s*[–—\-]+\s*(19\d{2}|20\d{2}|now|present|current)\b",
+    r"\b(19\d{2}|20\d{2})\s*[–—\-]+\s*(?:[A-Za-z]{3,9}\.?\s+)?(19\d{2}|20\d{2}|now|present|current)\b",
     re.IGNORECASE,
 )
 _SENIORITY = re.compile(r"\b(senior|staff|principal|lead|junior|jr|sr)\b", re.IGNORECASE)

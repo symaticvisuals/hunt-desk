@@ -59,6 +59,12 @@ uv run python -m hunt resume check resume.tex --job <posting url>
 uv run python -m hunt resume prompt <posting url>
 ```
 
+A resume tailored before a TeX engine was installed is kept as `.tex`. `./start` builds the missing PDFs once Tectonic is in place, or run:
+
+```sh
+uv run python -m hunt resume build
+```
+
 Folders from before the PDF output hold `resume.md` and are left as they are.
 
 ## Make it yours

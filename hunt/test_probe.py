@@ -77,5 +77,32 @@ class ProbeRunTests(unittest.TestCase):
         self.assertFalse((root / "data/schedule.json").exists())
 
 
+    def test_a_slow_board_is_given_up_on_at_the_deadline(self):
+        import threading
+        import time
+
+        from hunt.search import Job
+
+        root = Path(tempfile.mkdtemp())
+        (root / "profile").mkdir()
+        (root / "data").mkdir()
+        (root / "profile/search.json").write_text(json.dumps({"keywords": [], "location": {"mode": "any"}, "sources": []}), encoding="utf-8")
+        stuck = threading.Event()
+
+        def fetch(unit, *_args):
+            if unit == "jobspy:linkedin":
+                stuck.wait(5)
+                return [], []
+            return [Job("Acme", "Product Manager", "https://acme.example/1", "greenhouse", "1", "Pune, India", "Own it.", "greenhouse")], []
+
+        started = time.monotonic()
+        with patch("hunt.search.source_units", return_value=["greenhouse", "jobspy:linkedin"]), patch("hunt.search._fetch_unit", side_effect=fetch):
+            probe = run_probe(root, {}, {"roles": ["Product Manager"]}, deadline=0.5)
+        stuck.set()
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertTrue(probe.done)
+        self.assertEqual(probe.failed, ["jobspy:linkedin"])
+        self.assertEqual([row["url"] for row in probe.rows], ["https://acme.example/1"])
+
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,8 @@ PROBE = "data/probe.json"
 WINDOW_DAYS = 14
 # JobSpy searches only the first four titles. The rest are counted from ATS boards and feeds.
 JOBSPY_TITLES = 4
+# Step 2 should not keep a person waiting on one slow board; 76 to 138 seconds were seen with every board.
+DEADLINE_SECONDS = 90.0
 
 
 @dataclass
@@ -35,9 +38,12 @@ def _save(root: Path, probe: Probe) -> None:
     write_json(root / PROBE, {"at": probe.at, "roles": probe.roles, "failed": probe.failed, "done": probe.done, "rows": probe.rows})
 
 
-def run_probe(root: Path, env: dict[str, str], prefs: dict, *, on_unit=None, now: datetime | None = None) -> Probe:
+def run_probe(
+    root: Path, env: dict[str, str], prefs: dict, *, on_unit=None, now: datetime | None = None, deadline: float = DEADLINE_SECONDS
+) -> Probe:
     """Fetch every unit once without the title filter. The board schedule is left alone, so the next real check still
-    fetches everything new since its last run. Raises store.Busy when a check is already running."""
+    fetches everything new since its last run. A board still fetching at the deadline is named as having no answer.
+    Raises store.Busy when a check is already running."""
     from hunt.preferences import compiled_search, normalize
     from hunt.search import _fetch_unit, load_search, load_watchlist, source_units
     from hunt.store import run_lock
@@ -57,17 +63,35 @@ def run_probe(root: Path, env: dict[str, str], prefs: dict, *, on_unit=None, now
         except Exception as exc:
             return unit, [], [f"{unit}: {type(exc).__name__}: {exc}"]
 
+    def take(future) -> None:
+        unit, jobs, errors = future.result()
+        probe.rows.extend(job.as_dict() for job in jobs)
+        if errors and not jobs:
+            probe.failed.append(unit)
+        _save(root, probe)
+        if on_unit:
+            on_unit(unit, not (errors and not jobs))
+
     with run_lock(root):
         _save(root, probe)
-        with ThreadPoolExecutor(max_workers=max(1, min(8, len(units)))) as pool:
-            for future in as_completed([pool.submit(fetch, unit) for unit in units]):
-                unit, jobs, errors = future.result()
-                probe.rows.extend(job.as_dict() for job in jobs)
-                if errors and not jobs:
+        pool = ThreadPoolExecutor(max_workers=max(1, min(8, len(units))))
+        futures = {pool.submit(fetch, unit): unit for unit in units}
+        taken = set()
+        try:
+            for future in as_completed(futures, timeout=deadline):
+                take(future)
+                taken.add(future)
+        except FuturesTimeout:
+            for future, unit in futures.items():
+                if future in taken:
+                    continue
+                if future.done():
+                    take(future)
+                else:
                     probe.failed.append(unit)
-                _save(root, probe)
-                if on_unit:
-                    on_unit(unit, not (errors and not jobs))
+        finally:
+            # A board still fetching finishes in the background; its rows are not waited for.
+            pool.shutdown(wait=False, cancel_futures=True)
         probe.done = True
         _save(root, probe)
     return probe

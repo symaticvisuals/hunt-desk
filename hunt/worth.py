@@ -81,8 +81,8 @@ def set_max_posted_days(root: Path, days: int) -> None:
     with data_lock(root):
         try:
             custom = read_json(root / RULES, {})
-        except json.JSONDecodeError:
-            custom = {}
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{RULES} is not valid JSON, so the age rule was not saved. Fix the file, then save again.") from exc
         custom = custom if isinstance(custom, dict) else {}
         custom["max_posted_days"] = max(0, int(days))
         write_json(root / RULES, custom)

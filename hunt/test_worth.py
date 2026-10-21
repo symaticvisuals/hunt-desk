@@ -116,6 +116,16 @@ class WorthTests(unittest.TestCase):
         set_max_posted_days(root, 0)
         self.assertEqual(load_rules(root)[0]["max_posted_days"], 0)
 
+    def test_an_unreadable_rules_file_is_left_alone(self):
+        from hunt.worth import set_max_posted_days
+
+        root = Path(tempfile.mkdtemp())
+        (root / "profile").mkdir()
+        (root / "profile/worth.json").write_text("{ broken", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "not valid JSON"):
+            set_max_posted_days(root, 2)
+        self.assertEqual((root / "profile/worth.json").read_text(encoding="utf-8"), "{ broken")
+
     def test_the_shipped_rules_file_matches_the_defaults(self):
         shipped = json.loads((Path(__file__).resolve().parent.parent / "profile/defaults/worth.json").read_text(encoding="utf-8"))
         self.assertEqual(shipped, DEFAULT_RULES)

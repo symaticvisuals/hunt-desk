@@ -563,6 +563,7 @@ class HuntApp(App):
         self._busy = False
         self._key_asked = False
         self._probe_running = False
+        self._tailoring: set[str] = set()
         self._after_probe = None
         self._timers_started = False
         self._ctx = None
@@ -1006,15 +1007,12 @@ class HuntApp(App):
     def _classify_open(self) -> None:
         if self._busy or not any(reason == "not classified yet" for _, reason in self.hidden):
             return
-        from hunt.gate import CLASSIFIERS, label
-
         self._busy = True
-        name = label(self.root)
-        note = "locally. This does not call Claude." if name == CLASSIFIERS["clef"] else "through the Claude API."
-        self.activity(f"{name} is classifying new roles {note}")
+        self.activity("Classifying new roles…")
         self.run_worker(self._classify_worker, thread=True, exclusive=True)
 
     def _classify_worker(self) -> None:
+        self.call_from_thread(self.activity, _classify_message(self.root, _env(self.root)))
         from hunt.gate import GateError, classify_pending
         from hunt.store import Busy, run_lock
 
@@ -1267,6 +1265,9 @@ class HuntApp(App):
         if not str(job.get("final_score") or "").strip():
             self.notify("Score this role first (s). Tailoring starts from its score.")
             return
+        if (job.get("url") or "") in self._tailoring or (job.get("url") or "") in self._in_batch:
+            self.notify("This role is already being tailored.")
+            return
         import shutil
 
         from hunt import spend
@@ -1289,15 +1290,22 @@ class HuntApp(App):
         self._start_tailor(job)
 
     def _start_tailor(self, job: dict) -> None:
+        url = job.get("url") or ""
+        self._tailoring.add(url)
         self.activity(f"Tailoring {job.get('company') or 'company'} — {job.get('title') or 'role'}…")
 
         def work() -> None:
             from hunt.tailor import tailor_now
 
             made = tailor_now(self.root, job)
-            self.call_from_thread(self._score_done, job, made.message, made.code != 0)
+            self.call_from_thread(self._tailor_done, url, made.message, made.code != 0)
 
         self.run_worker(work, thread=True, group="score", exclusive=False)
+
+    def _tailor_done(self, url: str, message: str, failed: bool) -> None:
+        self._tailoring.discard(url)
+        self.reload()
+        self.notify(message, severity="error" if failed else "information")
 
     def action_copy_prompt(self) -> None:
         job = self._selected()
@@ -1398,6 +1406,18 @@ class HuntApp(App):
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
+
+
+def _classify_message(root: Path, env: dict[str, str]) -> str:
+    """Names the classifier that will really run. Asks Ollama, so it is called off the UI thread."""
+    from hunt.gate import active_classifier, classifier
+
+    active = active_classifier(root, env)
+    if active == "clef":
+        return "Clef-flash is classifying new roles locally. This does not call Claude."
+    if classifier(root) == "clef":
+        return "Haiku is classifying new roles through the Claude API, because Clef-flash is not running."
+    return "Haiku is classifying new roles through the Claude API."
 
 
 def _data_signature(root: Path) -> tuple[tuple[int, int] | None, ...]:

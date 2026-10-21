@@ -47,6 +47,14 @@ class OnboardTests(unittest.TestCase):
         self.assertNotIn("software engineer", found.keywords)
         self.assertEqual(found.years_cap, 12)
 
+    def test_date_ranges_with_month_names_count(self):
+        text = (
+            "Senior Product Manager | Finbox | Bengaluru\nJan 2022 – Present\n"
+            "Product Manager | Razorpay | Bengaluru\nJul 2019 – Dec 2021\n"
+            "Associate Product Manager | Swiggy | Bengaluru\nJun 2017 – Jun 2019\n"
+        )
+        self.assertEqual(infer(text, today=date(2026, 10, 21)).years_cap, 11)
+
     def test_only_an_engineering_word_brings_the_software_engineer_fallback(self):
         self.assertEqual(infer("Notes\n" + "Manager " * 20).keywords, [])
         self.assertEqual(infer("Notes\n" + "Engineer " * 20).keywords, ["software engineer"])

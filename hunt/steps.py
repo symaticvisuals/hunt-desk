@@ -374,7 +374,10 @@ class PreferencesStep(ModalScreen[bool]):
         )
         from hunt.worth import set_max_posted_days
 
-        set_max_posted_days(self._root, max_age)
+        try:
+            set_max_posted_days(self._root, max_age)
+        except ValueError as exc:
+            self.app.notify(str(exc), severity="warning")
         self.dismiss(True)
 
 

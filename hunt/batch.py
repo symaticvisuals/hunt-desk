@@ -180,7 +180,6 @@ def submit(root: Path, kind: str, jobs: list[dict], *, client=None, enforce: boo
     except Exception as exc:
         spend.release(root, token)
         raise BatchError(f"The Batch API refused the {kind} batch: {type(exc).__name__}: {getattr(exc, 'message', exc)}") from exc
-    spend.attach(root, token, batch.id)
     record = {
         "id": batch.id,
         "kind": kind,
@@ -189,11 +188,26 @@ def submit(root: Path, kind: str, jobs: list[dict], *, client=None, enforce: boo
         "jobs": {request["custom_id"]: job for request, job in zip(requests, unique)},
         "summary": "",
     }
-    with data_lock(root):
+    try:
+        _record(root, token, record)
+    except Exception as exc:
+        # A batch nobody tracks would be billed and never applied, so it is cancelled before it runs.
+        try:
+            api.messages.batches.cancel(batch.id)
+        except Exception:
+            pass
+        spend.release(root, token)
+        raise BatchError(f"The {kind} batch {batch.id} was sent but could not be recorded, so it was cancelled: {exc}") from exc
+    return batch.id, count
+
+
+def _record(root: Path, token: str, record: dict) -> None:
+    """The reservation becomes the batch's, and the batch joins data/batches.json, in one locked step."""
+    with data_lock(root, timeout=30):
+        spend.attach(root, token, record["id"])
         records = _load(root)
         records.append(record)
         write_json(root / BATCHES, records)
-    return batch.id, count
 
 
 def submit_scores(root: Path, jobs: list[dict], *, client=None, enforce: bool = True) -> str:
@@ -376,4 +390,25 @@ def _apply_tailors(root: Path, record: dict, outputs: dict, missing: list[str]) 
         note += f", {warned} need a look (⚠)"
     if failed_urls:
         note += f", {len(failed_urls)} failed"
+    ready = _natural_hires(root, [record["jobs"][custom_id] for custom_id in outputs], failed_urls)
+    if ready:
+        note += ". Ready to apply: " + ", ".join(ready)
     return note + ".", failed_urls
+
+
+def _natural_hires(root: Path, jobs: list[dict], failed_urls: list[str]) -> list[str]:
+    """Roles at or above natural_hire_at whose resume was just written. The tick turns the note into a notification."""
+    from hunt.evaluated import read_csv
+
+    rubric = read_json(root / "profile/rubric.json", {})
+    hire_at = float((rubric if isinstance(rubric, dict) else {}).get("natural_hire_at") or 80)
+    scores = {row.get("url"): row.get("final_score") for row in read_csv(root / "data/evaluated-jobs.csv")}
+    ready = []
+    for job in jobs:
+        try:
+            score = float(scores.get(job.get("url")) or "")
+        except ValueError:
+            continue
+        if score >= hire_at and (job.get("url") or "") not in failed_urls:
+            ready.append(f"{job.get('company') or 'company'} · {job.get('title') or job.get('role') or 'role'} ({score:g})")
+    return ready

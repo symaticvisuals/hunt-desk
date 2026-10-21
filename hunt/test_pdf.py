@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from hunt.pdf import ENGINES, Compiled, NoTeX, compile_tex, find_tex, fit_one_page
+from hunt.pdf import ENGINES, SEARCH_DIRS, Compiled, NoTeX, compile_tex, find_tex, fit_one_page
 
 SAMPLE = Path(__file__).resolve().parent / "testdata/sample-resume.json"
 
@@ -35,6 +35,16 @@ class EngineTests(unittest.TestCase):
         with patch.dict("os.environ", {"PATH": "/usr/bin:/bin"}):
             self.assertEqual(find_tex([folder]), (ENGINES[0], str(fake)))
             self.assertIsNone(find_tex([Path(tempfile.mkdtemp())]))
+
+    def test_the_default_folders_cover_the_installers_and_are_searched(self):
+        for folder in ("~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "~/Library/TinyTeX/bin/*"):
+            self.assertIn(folder, SEARCH_DIRS)
+        folder = Path(tempfile.mkdtemp())
+        fake = folder / ENGINES[0]
+        fake.write_text("#!/bin/sh\n", encoding="utf-8")
+        fake.chmod(0o755)
+        with patch.dict("os.environ", {"PATH": "/usr/bin:/bin"}), patch("hunt.pdf.SEARCH_DIRS", (str(folder),)):
+            self.assertEqual(find_tex(), (ENGINES[0], str(fake)))
 
     def test_no_engine_raises_notex(self):
         with patch("hunt.pdf.find_tex", return_value=None), self.assertRaises(NoTeX):

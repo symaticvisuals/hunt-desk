@@ -19,7 +19,11 @@ def _body(resume: dict) -> str:
 class EscapeTests(unittest.TestCase):
     def test_unsettable_characters_are_mapped_or_dropped(self):
         self.assertEqual(escape("Grew ARR 3× → $2M — fast 😀"), r"Grew ARR 3x to \$2M, fast")
-        self.assertEqual(escape("“one-tap” user’s 漢字 flow"), "\"one-tap\" user's flow")
+        self.assertEqual(escape("“one-tap” user’s 漢字 flow"), "``one-tap'' user's flow")
+
+    def test_double_quotes_open_and_close(self):
+        self.assertEqual(escape('Wrote PRDs for the "one-tap" flow'), "Wrote PRDs for the ``one-tap'' flow")
+        self.assertEqual(escape('("Beta") launch'), "(``Beta'') launch")
 
     def test_latin_extended_names_survive_and_control_characters_do_not(self):
         self.assertEqual(escape("Łukasz Dvořák · İstanbul · Nguyễn · Şahin"), "Łukasz Dvořák · İstanbul · Nguyễn · Şahin")
@@ -47,6 +51,7 @@ class EscapeTests(unittest.TestCase):
         self.assertEqual(escape("R&D 100% #1 a_b {x} ~ ^"), r"R\&D 100\% \#1 a\_b \{x\} \textasciitilde{} \textasciicircum{}")
         self.assertEqual(escape("C:\\temp"), r"C:\textbackslash{}temp")
         self.assertEqual(escape_url("https://priya.dev/#work?a=1%"), r"https://priya.dev/\#work?a=1\%")
+        self.assertEqual(escape_url("https://x.io/a{b}\\c#d%"), r"https://x.io/a\%7Bb\%7D\%5Cc\#d\%")
 
 
 class RenderTests(unittest.TestCase):

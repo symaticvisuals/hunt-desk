@@ -66,6 +66,10 @@ class FakeBatches:
         self.status[batch_id] = "ended"
         self.outputs[batch_id] = outputs
 
+    def cancel(self, batch_id):
+        self.status[batch_id] = "canceling"
+        self.cancelled = getattr(self, "cancelled", []) + [batch_id]
+
 
 class FakeClient:
     def __init__(self) -> None:
@@ -289,6 +293,35 @@ class SpendBatchTests(unittest.TestCase):
         self.batches.finish(batch_id, [_billed(custom_id, _score(job, 90))])
         poll(self.root, client=self.client)
         self.assertEqual(len(self.batches.created), 1)
+
+    def test_a_batch_that_cannot_be_recorded_is_cancelled(self):
+        from hunt.store import Busy
+
+        with patch("hunt.batch._record", side_effect=Busy("The job files are busy.")):
+            with self.assertRaisesRegex(BatchError, "cancelled"):
+                submit(self.root, "score", [_job(1)], client=self.client)
+        self.assertEqual(self.batches.cancelled, ["msgbatch_1"])
+        self.assertEqual(spent(self.root, "score"), 0.0)
+        self.assertEqual(open_batches(self.root), [])
+
+    def test_a_natural_hire_resume_says_it_is_ready(self):
+        from hunt.cli import record_score
+
+        job = _job(1)
+        record_score(self.root, job, {"base_score": 90, "penalties": "", "final_score": 90})
+        batch_id, _ = submit(self.root, "tailor", [job], client=self.client)
+        custom_id = self.batches.created[0][1][0]["custom_id"]
+        tailored = {
+            "candidate_level": "mid",
+            "header": {"name": "Ada", "email": "", "phone": "", "location": "", "links": []},
+            "summary": "",
+            "experience": [{"company": "Acme", "title": "Engineer", "location": "", "dates": "", "bullets": [{"text": "Shipped 4 multi-agent systems.", "priority": 1}]}],
+            "projects": [], "education": [], "skills": [], "jd_keywords": [], "changes": [], "gaps": [],
+        }
+        self.batches.finish(batch_id, [_billed(custom_id, tailored)])
+        with patch("hunt.pdf.find_tex", return_value=None):
+            notes = poll(self.root, client=self.client)
+        self.assertIn("Ready to apply: Acme · AI Engineer 1 (90)", notes[0])
 
     def test_tailoring_waits_when_scoring_spent_the_cap(self):
         _budget(self.root, 0.0045)

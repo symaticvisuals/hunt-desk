@@ -631,6 +631,19 @@ def cmd_resume(root: Path, args: list[str]) -> int:
             return 1
         print(raw_prompt(root, job))
         return 0
+    if args and args[0] == "build":
+        from hunt.tailor import rebuild_all
+
+        try:
+            made = rebuild_all(root)
+        except NoTeX as exc:
+            print(exc)
+            return 1
+        for line in made:
+            print(line)
+        if not made:
+            print("Nothing to rebuild. Every tailored resume has its PDF.")
+        return 0
     if len(args) >= 2 and args[0] == "check":
         path = Path(args[1])
         if not path.is_file():
@@ -663,6 +676,7 @@ def cmd_resume(root: Path, args: list[str]) -> int:
         return 0
     print("Usage: hunt resume prompt <url>")
     print("       hunt resume check <file.tex> [--job <url>]")
+    print("       hunt resume build   (PDFs for resumes tailored before a TeX engine was installed)")
     return 2
 
 

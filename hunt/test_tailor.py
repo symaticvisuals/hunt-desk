@@ -7,7 +7,7 @@ from unittest.mock import patch
 from hunt.cli import score_one
 from hunt.evaluated import read_csv
 from hunt.pdf import Compiled
-from hunt.tailor import new_numbers, raw_prompt, resume_flag, save_tailored, tailor_one, tailored_folder
+from hunt.tailor import new_numbers, raw_prompt, rebuild_all, resume_flag, save_tailored, tailor_one, tailored_folder
 
 JOB = {
     "company": "OpenAI",
@@ -182,6 +182,21 @@ class LatexTailorTests(unittest.TestCase):
         self.assertEqual((saved["pdf"], saved["pages"]), (True, 1))
         self.assertTrue((folder / "resume.pdf").exists())
         self.assertIn("## ATS check", (folder / "notes.md").read_text(encoding="utf-8"))
+
+    def test_resumes_written_without_tex_are_rebuilt_once_tex_is_there(self):
+        root = _root()
+        save_tailored(root, JOB, TAILORED)
+        folder = tailored_folder(root, JOB)
+        self.assertIn("hunt resume build", (folder / "notes.md").read_text(encoding="utf-8"))
+        made = rebuild_all(root, compile=_one_page_pdf)
+        self.assertEqual(len(made), 1)
+        self.assertTrue((folder / "resume.pdf").exists())
+        self.assertTrue(json.loads((folder / "ats.json").read_text(encoding="utf-8"))["pdf"])
+        notes = (folder / "notes.md").read_text(encoding="utf-8")
+        self.assertNotIn("PDF not built", notes)
+        self.assertIn("## ATS check", notes)
+        self.assertIn("Moved the multi-agent line", notes)
+        self.assertEqual(rebuild_all(root, compile=_one_page_pdf), [])
 
     def test_an_empty_answer_writes_nothing(self):
         root = _root()

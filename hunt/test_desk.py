@@ -547,6 +547,19 @@ class ParallelScoreDeskTests(unittest.TestCase):
         _pilot(root, script)
 
 
+class ClassifyMessageTests(unittest.TestCase):
+    def test_the_message_names_the_classifier_that_will_really_run(self):
+        from hunt.desk import _classify_message
+
+        root = _root()
+        (root / "profile/models.json").write_text(json.dumps({"classifier": "clef", "steps": {}}), encoding="utf-8")
+        key = {"ANTHROPIC_API_KEY": "sk-ant-x"}
+        with patch("hunt.gate.clef_reachable", return_value=False):
+            self.assertEqual(_classify_message(root, key), "Haiku is classifying new roles through the Claude API, because Clef-flash is not running.")
+        with patch("hunt.gate.clef_reachable", return_value=True):
+            self.assertEqual(_classify_message(root, key), "Clef-flash is classifying new roles locally. This does not call Claude.")
+
+
 class ProcessAllTests(unittest.TestCase):
     def _root_with_six(self) -> Path:
         root = _root()
@@ -646,6 +659,34 @@ class ProcessAllTests(unittest.TestCase):
                 scored.assert_not_called()
 
         _pilot(root, script, key=False)
+
+    def test_t_twice_tailors_once(self):
+        import threading
+
+        from hunt.tailor import Tailored
+
+        root = self._root_with_six()
+        release = threading.Event()
+        calls = []
+
+        def slow_tailor(_root, job, **_kwargs):
+            calls.append(job["url"])
+            release.wait(5)
+            return Tailored(0, "Tailored resume: x")
+
+        async def script(app, pilot):
+            job = app.shown[0]
+            job["final_score"] = "85"
+            with patch("hunt.tailor.tailor_now", side_effect=slow_tailor), patch("shutil.which", return_value="/usr/local/bin/claude"):
+                await pilot.press("t")
+                await pilot.pause(0.2)
+                await pilot.press("t")
+                await pilot.pause(0.2)
+                release.set()
+                await _settle(app, pilot)
+            self.assertEqual(calls, [job["url"]])
+
+        _pilot(root, script)
 
     def test_s_queues_once_three_roles_are_scoring(self):
         import threading

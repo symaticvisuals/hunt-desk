@@ -182,9 +182,51 @@ def resume_text(resume: dict) -> str:
     return "\n".join(line for line in lines if line.strip())
 
 
+NO_TEX = "PDF not built: no TeX engine found. Run ./start to install one, then: uv run python -m hunt resume build"
+
+
+@dataclass
+class _Built:
+    resume: dict
+    built: bool
+    pages: int
+    over: bool
+    checks: list[Check]
+    cuts: list[str]
+    problem: str
+
+
+def _build(root: Path, folder: Path, resume: dict, job_text: str, compile=None) -> _Built:
+    """Fit to one page, compile, check, and write resume.json, resume.tex, resume.pdf, and ats.json."""
+    from hunt import ats, latex, pdf
+
+    problem = ""
+    fitted = None
+    try:
+        fitted = pdf.fit_one_page(resume, compile=compile or pdf.compile_tex)
+    except pdf.NoTeX:
+        problem = NO_TEX
+    final = fitted.resume if fitted else resume
+    (folder / "resume.json").write_text(json.dumps(final, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    (folder / "resume.tex").write_text(fitted.tex if fitted else latex.render(resume), encoding="utf-8")
+    checks: list[Check] = []
+    built = bool(fitted and fitted.compiled.ok)
+    if fitted and not fitted.compiled.ok:
+        problem = "PDF not built: the TeX engine stopped.\n\n```\n" + fitted.compiled.log_tail + "\n```"
+    if built:
+        (folder / "resume.pdf").write_bytes(fitted.compiled.pdf)
+        text = ats.pdf_text(fitted.compiled.pdf)
+        checks = ats.check(text, fitted.compiled.pages, ats.from_resume(final), job_text, master_text(root))
+    over = bool(fitted and fitted.over)
+    pages = fitted.compiled.pages if built else 0
+    state = {"pdf": built, "pages": pages, "failed": ats.failed(checks), "over": over}
+    (folder / "ats.json").write_text(json.dumps(state) + "\n", encoding="utf-8")
+    return _Built(final, built, pages, over, checks, fitted.cuts if fitted else [], problem)
+
+
 def save_tailored(root: Path, job: dict, output: dict, *, compile=None) -> Tailored:
     """Write resume.json, resume.tex, resume.pdf when it builds, ats.json, jd.md, and notes.md for one role."""
-    from hunt import ats, latex, pdf
+    from hunt import ats
 
     experience = [entry for entry in output.get("experience") or [] if any((bullet.get("text") or "").strip() for bullet in entry.get("bullets") or [])]
     if not experience:
@@ -193,37 +235,48 @@ def save_tailored(root: Path, job: dict, output: dict, *, compile=None) -> Tailo
     resume["experience"] = experience
     folder = tailored_folder(root, job)
     folder.mkdir(parents=True, exist_ok=True)
-    problem = ""
-    fitted = None
-    try:
-        fitted = pdf.fit_one_page(resume, compile=compile or pdf.compile_tex)
-    except pdf.NoTeX:
-        problem = "PDF not built: no TeX engine found. Run ./start to install it."
-    final = fitted.resume if fitted else resume
-    tex = fitted.tex if fitted else latex.render(resume)
-    (folder / "resume.json").write_text(json.dumps(final, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    (folder / "resume.tex").write_text(tex, encoding="utf-8")
     (folder / "jd.md").write_text(_job_text(job), encoding="utf-8")
-    master = master_text(root)
-    checks: list[Check] = []
-    built = bool(fitted and fitted.compiled.ok)
-    if fitted and not fitted.compiled.ok:
-        problem = "PDF not built: the TeX engine stopped.\n\n```\n" + fitted.compiled.log_tail + "\n```"
-    if built:
-        (folder / "resume.pdf").write_bytes(fitted.compiled.pdf)
-        text = ats.pdf_text(fitted.compiled.pdf)
-        checks = ats.check(text, fitted.compiled.pages, ats.from_resume(final), job.get("description") or "", master)
-    over = bool(fitted and fitted.over)
-    failed = ats.failed(checks)
-    state = {"pdf": built, "pages": fitted.compiled.pages if built else 0, "failed": failed, "over": over}
-    (folder / "ats.json").write_text(json.dumps(state) + "\n", encoding="utf-8")
-    added = new_numbers(master, resume_text(final))
-    (folder / "notes.md").write_text(_notes(output, added, fitted.cuts if fitted else [], checks, problem), encoding="utf-8")
-    where = (folder / ("resume.pdf" if built else "resume.tex")).relative_to(root)
+    done = _build(root, folder, resume, job.get("description") or "", compile)
+    added = new_numbers(master_text(root), resume_text(done.resume))
+    (folder / "notes.md").write_text(_notes(output, added, done.cuts, done.checks, done.problem), encoding="utf-8")
+    where = (folder / ("resume.pdf" if done.built else "resume.tex")).relative_to(root)
     message = f"Tailored resume: {where}"
     if added:
         message += f". Check these numbers, they are not in your master resume: {', '.join(added)}"
-    return Tailored(0, message, folder, warn=not built or over or bool(failed))
+    return Tailored(0, message, folder, warn=not done.built or done.over or bool(ats.failed(done.checks)))
+
+
+def rebuild(root: Path, folder: Path, *, compile=None) -> Tailored:
+    """Build the PDF for a folder tailored before a TeX engine was installed. The notes keep what changed and the gaps."""
+    from hunt import ats
+
+    resume = json.loads((folder / "resume.json").read_text(encoding="utf-8"))
+    jd = folder / "jd.md"
+    done = _build(root, folder, resume, jd.read_text(encoding="utf-8") if jd.exists() else "", compile)
+    notes_path = folder / "notes.md"
+    notes = notes_path.read_text(encoding="utf-8") if notes_path.exists() else "# Notes\n"
+    cut = min((notes.find(marker) for marker in _GENERATED if marker in notes), default=len(notes))
+    notes_path.write_text(notes[:cut].rstrip() + "\n" + _tail(done.cuts, done.checks, done.problem), encoding="utf-8")
+    where = (folder / ("resume.pdf" if done.built else "resume.tex")).relative_to(root)
+    return Tailored(0 if done.built else 1, f"Rebuilt: {where}", folder, warn=not done.built or done.over or bool(ats.failed(done.checks)))
+
+
+def rebuild_all(root: Path, *, compile=None) -> list[str]:
+    """Every folder with resume.json whose PDF was never built."""
+    from hunt.pdf import NoTeX, find_tex
+
+    if compile is None and find_tex() is None:
+        raise NoTeX(NO_TEX)
+    messages = []
+    for state in sorted((root / "resumes").glob("*/*/ats.json")):
+        try:
+            built = json.loads(state.read_text(encoding="utf-8")).get("pdf")
+        except json.JSONDecodeError:
+            built = False
+        if built or not (state.parent / "resume.json").exists():
+            continue
+        messages.append(rebuild(root, state.parent, compile=compile).message)
+    return messages
 
 
 def _score_line(root: Path, job: dict) -> str:
@@ -299,8 +352,6 @@ def _job_text(job: dict) -> str:
 
 
 def _notes(output: dict, added: list[str], cuts: list[str], checks: list[Check], problem: str) -> str:
-    from hunt.ats import report
-
     lines = ["# Notes", "", "## What changed", ""]
     lines += [f"- {item}" for item in output.get("changes") or []] or ["- Nothing was moved."]
     lines += ["", "## What this job wants that your resume does not show", ""]
@@ -308,10 +359,21 @@ def _notes(output: dict, added: list[str], cuts: list[str], checks: list[Check],
     if added:
         lines += ["", "## Check these numbers", "", "They are not in profile/og-resume.md. Remove any that are not true.", ""]
         lines += [f"- {token}" for token in added]
+    return "\n".join(lines) + "\n" + _tail(cuts, checks, problem)
+
+
+# The sections a build writes at the end of notes.md; a rebuild replaces them.
+_GENERATED = ("\n## Cuts for one page", "\nPDF not built", "\n## ATS check")
+
+
+def _tail(cuts: list[str], checks: list[Check], problem: str) -> str:
+    from hunt.ats import report
+
+    lines: list[str] = []
     if cuts:
         lines += ["", "## Cuts for one page", ""] + [f"- {cut}" for cut in cuts]
     if problem:
         lines += ["", problem]
     if checks:
         lines += ["", report(checks)]
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n" if lines else ""

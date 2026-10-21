@@ -66,6 +66,27 @@ class AtsTests(unittest.TestCase):
     def test_without_a_job_the_keyword_check_is_skipped(self):
         self.assertNotIn("Keywords", [item.name for item in check(_text(), 1, FACTS, None, MASTER)])
 
+    def test_company_names_are_not_banned_phrases(self):
+        facts = FACTS._replace(names=FACTS.names + ["Dynamic Yield"])
+        text = _text() + "\nDynamic Yield Remote"
+        self.assertEqual(failed(check(text, 1, facts, JOB, MASTER + " Dynamic Yield")), [])
+        self.assertEqual(failed(check(text + " Responsible for tests.", 1, facts, JOB, MASTER + " Dynamic Yield")), ["Banned phrases"])
+
+    def test_pdf_text_keeps_kerned_words_whole(self):
+        from hunt.ats import pdf_text
+        from hunt.pdf import compile_tex, find_tex
+
+        if find_tex() is None:
+            self.skipTest("no TeX engine on this machine")
+        resume = {
+            "candidate_level": "entry",
+            "header": {"name": "Maya Rao", "email": "m@x.io", "phone": "+91 98450 11223"},
+            "experience": [{"company": "Acme", "title": "PM", "dates": "2024", "bullets": [{"text": "Owned the roadmap.", "priority": 1}]}],
+            "education": [{"school": "NIT Trichy", "location": "Trichy", "degree": "B.Tech", "dates": "2013 - 2017"}],
+        }
+        compiled = compile_tex(render(resume))
+        self.assertIn("NIT Trichy", " ".join(pdf_text(compiled.pdf).split()))
+
     def test_facts_from_tex_match_the_rendered_resume(self):
         tex = render(_sample())
         facts = from_tex(tex)

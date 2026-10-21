@@ -58,13 +58,19 @@ def plain(text: str) -> str:
     return re.sub(r"\s+", " ", out).strip()
 
 
+_OPEN_QUOTE = re.compile(r'(^|[\s(\[{])"')
+
+
 def escape(text: str) -> str:
-    return "".join(_SPECIAL.get(ch, ch) for ch in plain(text))
+    out = "".join(_SPECIAL.get(ch, ch) for ch in plain(text))
+    # A straight " prints as a closing quote either way; LaTeX wants `` to open and '' to close.
+    return _OPEN_QUOTE.sub(lambda match: match.group(1) + "``", out).replace('"', "''")
 
 
 def escape_url(url: str) -> str:
-    """hyperref takes a URL almost raw; only # and % would break the argument."""
-    return plain(url).replace("#", r"\#").replace("%", r"\%")
+    """hyperref takes a URL almost raw. Braces and backslashes are percent-encoded, then # and % escaped."""
+    text = plain(url).replace("{", "%7B").replace("}", "%7D").replace("\\", "%5C")
+    return text.replace("#", r"\#").replace("%", r"\%")
 
 
 def _dates(text: str) -> str:

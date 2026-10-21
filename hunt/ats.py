@@ -47,7 +47,16 @@ class Facts(NamedTuple):
 def pdf_text(data: bytes) -> str:
     from pypdf import PdfReader
 
-    return "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(data)).pages)
+    return "\n".join(_page_text(page) for page in PdfReader(BytesIO(data)).pages)
+
+
+def _page_text(page) -> str:
+    """Layout mode keeps kerned words whole ("Trichy", not "T richy"), as poppler and Preview read them.
+    It fails on a page with no content stream, where plain mode still answers."""
+    try:
+        return page.extract_text(extraction_mode="layout") or ""
+    except Exception:
+        return page.extract_text() or ""
 
 
 def from_resume(resume: dict) -> Facts:
@@ -158,7 +167,12 @@ def check(text: str, pages: int, facts: Facts, job_text: str | None, master: str
         if outside:
             detail += f"; not in the posting: {', '.join(outside)}"
         checks.append(Check("Keywords", ok, detail))
-    banned = [phrase for phrase in BANNED if re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", text, re.IGNORECASE)]
+    # A company called Dynamic Yield is a name, not the word "dynamic".
+    prose = text
+    for name in facts.names:
+        if name:
+            prose = re.sub(re.escape(name), " ", prose, flags=re.IGNORECASE)
+    banned = [phrase for phrase in BANNED if re.search(rf"(?<![a-z]){re.escape(phrase)}(?![a-z])", prose, re.IGNORECASE)]
     if "—" in text:
         banned.append("em dash")
     checks.append(Check("Banned phrases", not banned, ", ".join(banned)))

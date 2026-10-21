@@ -373,6 +373,14 @@ class HaikuBudgetTests(unittest.TestCase):
             evaluate(root, self.JOB, predictor=haiku_predictor(root, client=BilledHaikuClient(stop_reason="max_tokens")))
         self.assertAlmostEqual(spent(root, "classify"), 0.00015)
 
+    def test_a_call_that_would_pass_the_cap_is_not_sent(self):
+        root = _with_budget(_haiku_root(), 0.0005)
+        client = BilledHaikuClient()
+        with self.assertRaisesRegex(GateError, "classify budget is spent"):
+            evaluate(root, self.JOB, predictor=haiku_predictor(root, client=client))
+        self.assertEqual(client.calls, [])
+        self.assertEqual(spent(root, "classify"), 0.0)
+
     def test_clef_falls_back_to_haiku_only_with_a_key_and_no_ollama(self):
         root = _haiku_root()
         (root / "profile/models.json").write_text(json.dumps({"classifier": "clef", "steps": {}}), encoding="utf-8")

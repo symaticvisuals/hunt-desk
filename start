@@ -16,6 +16,7 @@ fail() {
 }
 
 export PATH="$HOME/.local/bin:$PATH"
+TECTONIC_VERSION=0.17.0
 
 step "uv"
 if command -v uv >/dev/null 2>&1; then
@@ -33,12 +34,18 @@ if [ "$NO_TEX" = 1 ]; then
 elif uv run python -c "from hunt.pdf import find_tex; raise SystemExit(0 if find_tex() else 1)"; then
   echo "already installed"
 else
-  echo "Installing Tectonic into ~/.local/bin (about 30 MB, no sudo)."
+  case "$(uname -m)" in
+    arm64) target=aarch64-apple-darwin ;;
+    *) target=x86_64-apple-darwin ;;
+  esac
+  url="https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${TECTONIC_VERSION}/tectonic-${TECTONIC_VERSION}-${target}.tar.gz"
+  echo "Installing Tectonic ${TECTONIC_VERSION} into ~/.local/bin (about 30 MB, no sudo)."
   work=$(mktemp -d)
-  (cd "$work" && curl --proto '=https' --tlsv1.2 -fsSL https://drop-sh.fullyjustified.net | sh) \
-    || fail "installing Tectonic" "./start"
+  curl --proto '=https' --tlsv1.2 -fsSL "$url" | tar -xz -C "$work" \
+    || fail "installing Tectonic" "./start   (or ./start --no-tex to skip PDF resumes for now)"
   mkdir -p "$HOME/.local/bin"
-  mv "$work/tectonic" "$HOME/.local/bin/tectonic" || fail "installing Tectonic" "./start"
+  mv "$work/tectonic" "$HOME/.local/bin/tectonic" \
+    || fail "installing Tectonic" "./start   (or ./start --no-tex to skip PDF resumes for now)"
 fi
 
 step "Starting files"
@@ -46,7 +53,11 @@ uv run python -m hunt seed || fail "copying the starting files" "uv run python -
 
 if [ "$NO_TEX" = 0 ]; then
   step "Checking the TeX engine (first run downloads its packages)"
-  uv run python -m hunt tex-check || echo "The TeX check failed. Resumes are kept as .tex until it passes: uv run python -m hunt tex-check"
+  if uv run python -m hunt tex-check; then
+    uv run python -m hunt resume build
+  else
+    echo "The TeX check failed. Resumes are kept as .tex until it passes: uv run python -m hunt tex-check"
+  fi
 fi
 
 step "Opening the desk"
