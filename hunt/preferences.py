@@ -63,7 +63,9 @@ _ANNUAL = {"yearly": 1, "year": 1, "annual": 1, "monthly": 12, "month": 12, "wee
 PREFERENCES_SYSTEM = (
     "You read one resume and propose job-search preferences for the person it describes. "
     "Propose only what the resume supports. "
-    "roles: job titles this person would be a natural hire for, best fit first, at most eight. "
+    "roles: up to eight job titles, best fit first. Start with the titles the resume shows directly, then add adjacent "
+    "titles the resume supports: more scope, a neighbouring function, or the same function in a growing domain. "
+    "adjacent: the titles from roles that are adjacent rather than shown directly. "
     "seniority: the levels they would apply at. "
     "max_years: the years of experience the resume shows plus two, or null when it has no dates. "
     "work_modes: all three unless the resume states a preference. "
@@ -79,6 +81,7 @@ PREFERENCES_SCHEMA = {
     "additionalProperties": False,
     "required": [
         "roles",
+        "adjacent",
         "seniority",
         "max_years",
         "cities",
@@ -93,6 +96,7 @@ PREFERENCES_SCHEMA = {
     ],
     "properties": {
         "roles": _LIST,
+        "adjacent": _LIST,
         "seniority": {"type": "array", "items": {"type": "string", "enum": list(SENIORITY)}},
         "max_years": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
         "cities": _LIST,
@@ -112,6 +116,7 @@ def defaults() -> dict:
     return {
         "confirmed": False,
         "roles": [],
+        "adjacent": [],
         "seniority": ["junior", "mid", "senior", "lead"],
         "max_years": None,
         "cities": [],
@@ -159,7 +164,7 @@ def normalize(raw: dict) -> dict:
     prefs = defaults()
     raw = raw if isinstance(raw, dict) else {}
     prefs["confirmed"] = raw.get("confirmed") is True
-    for name in ("roles", "cities", "countries", "remote_only_countries", "exclude_titles"):
+    for name in ("roles", "adjacent", "cities", "countries", "remote_only_countries", "exclude_titles"):
         if name in raw:
             prefs[name] = _strings(raw.get(name))
     if "seniority" in raw:
@@ -255,12 +260,12 @@ def save(root: Path, prefs: dict) -> dict:
     return prefs
 
 
-def compile_preferences(root: Path, prefs: dict) -> None:
-    """Write the fields preferences own. Sources, the watchlist, and the rubric's math stay as they are."""
+def compiled_search(prefs: dict, search: dict) -> dict:
+    """The search these preferences make, as a new dict. Sources and other options are kept. Never mutates search."""
+    import copy
+
     prefs = normalize(prefs)
-    search_path = root / "profile/search.json"
-    search = read_json(search_path, {})
-    search = search if isinstance(search, dict) else {}
+    search = copy.deepcopy(search) if isinstance(search, dict) else {}
     search["keywords"] = list(prefs["roles"])
     search["exclude_title"] = list(prefs["exclude_titles"])
     search["location"] = {
@@ -283,7 +288,14 @@ def compile_preferences(root: Path, prefs: dict) -> None:
     remote = "remote" in prefs["work_modes"]
     jobspy["remote_countries"] = ((home if prefs["cities"] else []) + remote_only) if remote else []
     search.setdefault("sources", [])
-    write_json(search_path, search)
+    return search
+
+
+def compile_preferences(root: Path, prefs: dict) -> None:
+    """Write the fields preferences own. Sources, the watchlist, and the rubric's math stay as they are."""
+    prefs = normalize(prefs)
+    search_path = root / "profile/search.json"
+    write_json(search_path, compiled_search(prefs, read_json(search_path, {})))
 
     rubric_path = root / "profile/rubric.json"
     rubric = read_json(rubric_path, {})
@@ -334,6 +346,8 @@ def propose(root: Path, *, client=None) -> tuple[dict, str]:
         value = _strings(reply.get(name))
         if value:
             merged[name] = value
+    if _strings(reply.get("roles")):
+        merged["adjacent"] = _strings(reply.get("adjacent"))
     if reply.get("max_years") is not None:
         merged["max_years"] = reply.get("max_years")
     if reply.get("pay_floor_amount") is not None:

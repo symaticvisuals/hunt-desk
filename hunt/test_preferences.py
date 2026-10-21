@@ -5,8 +5,10 @@ from pathlib import Path
 
 from hunt.preferences import (
     DEFAULT_BUDGET,
+    PREFERENCES_SCHEMA,
     PREFERENCES_SYSTEM,
     budget_set,
+    compiled_search,
     compile_preferences,
     is_confirmed,
     job_type_ok,
@@ -151,6 +153,41 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(prefs["cities"], ["Pune"])
         self.assertIn("Claude", note)
         self.assertEqual(client.messages.kwargs[0]["model"], "claude-haiku-5-5")
+
+    def test_compiled_search_is_pure(self):
+        search = {"keywords": ["old"], "sources": ["ashby"], "source_options": {"jobspy": {"hours_old": 48}}}
+        before = json.dumps(search, sort_keys=True)
+        out = compiled_search(normalize({"roles": ["Product Manager"], "countries": ["India"]}), search)
+        self.assertEqual(json.dumps(search, sort_keys=True), before)
+        self.assertEqual(
+            (out["keywords"], out["sources"], out["source_options"]["jobspy"]["hours_old"], out["location"]["countries"]),
+            (["Product Manager"], ["ashby"], 48, ["India"]),
+        )
+
+    def test_adjacent_titles_survive_normalize_and_a_proposal(self):
+        self.assertEqual(normalize({"adjacent": ["Product Operations Manager"]})["adjacent"], ["Product Operations Manager"])
+        root = _root()
+        migrate(root)
+        reply = json.dumps(
+            {
+                "roles": ["Product Manager", "Product Operations Manager"],
+                "adjacent": ["Product Operations Manager"],
+                "seniority": ["mid"],
+                "max_years": 6,
+                "cities": [],
+                "countries": [],
+                "remote_only_countries": [],
+                "work_modes": ["remote"],
+                "job_types": ["fulltime"],
+                "exclude_titles": ["intern"],
+                "pay_floor_amount": None,
+                "pay_currency": "",
+                "company_size": "any",
+            }
+        )
+        prefs, _note = propose(root, client=FakeClient({PREFERENCES_SYSTEM[:40]: reply}))
+        self.assertEqual(prefs["adjacent"], ["Product Operations Manager"])
+        self.assertIn("adjacent", PREFERENCES_SCHEMA["required"])
 
     def test_a_failed_call_falls_back_to_the_resume_alone(self):
         root = _root()
