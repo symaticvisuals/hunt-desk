@@ -1,0 +1,22 @@
+{
+  "candidate_level": "mid",
+  "header": {"name": "Priya Nair", "email": "priya_n@example.com", "phone": "+91 98100 12345", "location": "Bengaluru, India",
+             "links": [{"label": "LinkedIn", "url": "linkedin.com/in/priya-nair"}, {"label": "Site", "url": "https://priya.dev/#work?a=1%"}]},
+  "summary": "Product manager who shipped a payments checkout used by 2M shoppers — and the pricing tools behind it.",
+  "experience": [
+    {"company": "Acme & Co", "title": "Senior Product Manager", "location": "Bengaluru", "dates": "Jan 2022 – Present",
+     "bullets": [{"text": "Led checkout redesign → conversion up 12% across 2M shoppers", "priority": 1},
+                 {"text": "Ran discovery with 40 merchants on pricing_v2 and cut refunds 8%", "priority": 2},
+                 {"text": "Owned the roadmap for 3 squads using SQL and Amplitude", "priority": 3},
+                 {"text": "Wrote PRDs for the “one-tap” flow 🚀 with 漢字 support", "priority": 4}]},
+    {"company": "Beta Labs", "title": "Product Manager", "location": "Pune", "dates": "2019 - 2021",
+     "bullets": [{"text": "Launched B2B onboarding in 6 weeks for 120 accounts", "priority": 1},
+                 {"text": "Built the experimentation cadence: 30 A/B tests a quarter", "priority": 2},
+                 {"text": "Partnered with sales on #1 deal desk tooling", "priority": 3}]}
+  ],
+  "projects": [{"name": "Pricing simulator", "stack": "Python, Streamlit", "dates": "2023", "priority": 1,
+                "bullets": [{"text": "Modelled 5 price tiers for finance reviews", "priority": 1}]}],
+  "education": [{"school": "IIT Bombay", "location": "Mumbai", "degree": "B.Tech, Mechanical", "dates": "2014 – 2018"}],
+  "skills": [{"label": "Product", "items": "Discovery, roadmaps, PRDs, A/B testing"}, {"label": "Data", "items": "SQL, Amplitude, Excel"}],
+  "jd_keywords": ["checkout", "A/B testing", "SQL", "roadmap", "discovery", "payments"]
+}
