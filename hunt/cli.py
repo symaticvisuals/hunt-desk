@@ -192,8 +192,9 @@ class Scored:
     final_score: float | None = None
 
 
-def score_one(root: Path, job: dict, *, runner=subprocess.run) -> Scored:
-    """Ask Claude Code for one role's score, then write the row here. 127 means the claude binary is missing."""
+def score_one(root: Path, job: dict, *, runner=subprocess.run, client=None) -> Scored:
+    """Ask Claude Code for one role's score, then write the row here. Without the claude CLI, a key sends it
+    through the Messages API instead. 127 means neither is available."""
     from hunt.claude_cli import ClaudeMissing, ask, job_dir
     from hunt.trim import shorten
 
@@ -213,7 +214,17 @@ def score_one(root: Path, job: dict, *, runner=subprocess.run) -> Scored:
             runner=runner,
         )
     except ClaudeMissing as exc:
-        return Scored(127, str(exc))
+        from hunt.tailor import api_key_ready
+
+        if not api_key_ready(root):
+            return Scored(127, str(exc))
+        from hunt.batch import BatchError, run_now
+
+        problem = ""
+        try:
+            output = run_now(root, "score", job, client=client)
+        except BatchError as error:
+            return Scored(1, f"Claude could not score {label}: {error}")
     if output is None:
         return Scored(1, f"Claude could not score {label}: {problem}")
     jobs = output.get("jobs") or []
@@ -224,9 +235,9 @@ def score_one(root: Path, job: dict, *, runner=subprocess.run) -> Scored:
     final = float(row["final_score"])
     message = f"{label}: {final:g} ({row.get('penalties') or 'no penalties'})"
     if final > screenout_cap(root):
-        from hunt.tailor import tailor_one
+        from hunt.tailor import tailor_now
 
-        message += ". " + tailor_one(root, job, runner=runner).message
+        message += ". " + tailor_now(root, job, runner=runner, client=client).message
     return Scored(0, message, final)
 
 

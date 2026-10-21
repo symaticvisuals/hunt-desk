@@ -143,11 +143,32 @@ class ScoreOneTests(unittest.TestCase):
         self.assertEqual(scored.code, 1)
         self.assertIn("Not logged in", scored.message)
 
-    def test_a_missing_binary_is_127(self):
+    def test_without_the_cli_or_a_key_it_is_still_127(self):
         root = _root()
-        with patch("hunt.claude_cli.shutil.which", return_value=None):
+        with patch("hunt.claude_cli.shutil.which", return_value=None), patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}):
             scored = score_one(root, JOB, runner=Runner(""))
         self.assertEqual(scored.code, 127)
+
+    def test_without_the_cli_a_key_scores_through_the_api(self):
+        from contextlib import contextmanager
+        from types import SimpleNamespace as NS
+
+        from hunt.spend import spent
+
+        root = _root()
+        payload = {"jobs": [{"company": JOB["company"], "role": JOB["title"], "base_score": 60, "penalties": "", "final_score": 60, "url": JOB["url"]}]}
+        usage = NS(input_tokens=1000, output_tokens=200, cache_read_input_tokens=0, cache_creation_input_tokens=0)
+        message = NS(content=[NS(type="text", text=json.dumps(payload))], stop_reason="end_turn", model="claude-opus-5-5", usage=usage)
+
+        @contextmanager
+        def stream(**kwargs):
+            yield NS(get_final_message=lambda: message)
+
+        with patch("hunt.claude_cli.shutil.which", return_value=None), patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-ant-x"}):
+            scored = score_one(root, JOB, runner=Runner(""), client=NS(messages=NS(stream=stream)))
+        self.assertEqual((scored.code, scored.final_score), (0, 60.0))
+        self.assertEqual(read_csv(root / "data/evaluated-jobs.csv")[0]["final_score"], "60")
+        self.assertGreater(spent(root, "score"), 0)
 
 
 class ParallelScoreTests(unittest.TestCase):

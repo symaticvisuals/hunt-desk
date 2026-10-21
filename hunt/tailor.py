@@ -125,6 +125,30 @@ def tailor_one(root: Path, job: dict, *, runner=subprocess.run) -> Tailored:
     return save_tailored(root, job, output)
 
 
+def api_key_ready(root: Path) -> bool:
+    """A key in the environment or .env. The claude CLI is preferred; this is the fallback."""
+    import os
+
+    from hunt.sources import load_env
+
+    load_env(root / ".env")
+    return (os.environ.get("ANTHROPIC_API_KEY") or "").strip().startswith("sk-ant-")
+
+
+def tailor_now(root: Path, job: dict, *, runner=subprocess.run, client=None) -> Tailored:
+    """Tailor one role at once: claude -p when installed, otherwise the Messages API at full price."""
+    made = tailor_one(root, job, runner=runner)
+    if made.code != 127 or not api_key_ready(root):
+        return made
+    from hunt.batch import BatchError, run_now
+
+    try:
+        output = run_now(root, "tailor", job, client=client)
+    except BatchError as exc:
+        return Tailored(1, f"Tailoring failed: {exc}")
+    return save_tailored(root, job, output)
+
+
 def master_text(root: Path) -> str:
     """The one resume tailoring starts from. Per-track resumes can replace it here later."""
     from hunt.inbox import read_resume
