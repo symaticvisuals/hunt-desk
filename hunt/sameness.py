@@ -61,12 +61,21 @@ def shared_lines(first: list[frozenset[str]], second: list[frozenset[str]]) -> f
     return hits / (len(first) + len(second))
 
 
+def _text(role: Path) -> str:
+    """resume.json from LaTeX tailoring, as bullet lines, or resume.md from before it."""
+    import json
+
+    if (role / "resume.json").is_file():
+        resume = json.loads((role / "resume.json").read_text(encoding="utf-8"))
+        entries = (resume.get("experience") or []) + (resume.get("projects") or [])
+        return "\n".join(f"- {bullet.get('text') or ''}" for entry in entries for bullet in entry.get("bullets") or [])
+    return (role / "resume.md").read_text(encoding="utf-8")
+
+
 def measure(root: Path) -> Sameness:
     folder = root / "resumes"
-    found = {
-        str(path.parent.relative_to(folder)): lines(path.read_text(encoding="utf-8"))
-        for path in sorted(folder.glob("*/*/resume.md"))
-    }
+    roles = sorted({path.parent for pattern in ("*/*/resume.json", "*/*/resume.md") for path in folder.glob(pattern)})
+    found = {str(role.relative_to(folder)): lines(_text(role)) for role in roles}
     pairs = [Pair(first, second, shared_lines(found[first], found[second])) for first, second in itertools.combinations(found, 2)]
     pairs.sort(key=lambda pair: pair.shared, reverse=True)
     return Sameness(list(found), pairs)

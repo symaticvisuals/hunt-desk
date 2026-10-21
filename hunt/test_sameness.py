@@ -1,6 +1,7 @@
 import io
 import tempfile
 import unittest
+import json
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -64,6 +65,18 @@ class SamenessTests(unittest.TestCase):
     def test_resumes_that_repeat_most_lines_are_called_out(self):
         text = report(measure(_root({"acme/engineer": BILLING, "globex/engineer": BILLING_REORDERED})))
         self.assertIn("mostly repeat the same lines", text)
+
+    def test_json_resumes_are_read_too(self):
+        root = _root({"acme/engineer": BILLING})
+        bullets = [line[2:] for line in BILLING_REORDERED.splitlines() if line.startswith("- ")]
+        resume = {"header": {"name": "Ada Lovelace"}, "experience": [{"company": "Beta", "title": "Engineer", "bullets": [{"text": text, "priority": 1} for text in bullets]}]}
+        path = root / "resumes/beta/engineer/resume.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(resume), encoding="utf-8")
+        found = measure(root)
+        self.assertEqual(found.resumes, ["acme/engineer", "beta/engineer"])
+        self.assertEqual(len(found.pairs), 1)
+        self.assertGreater(found.pairs[0].shared, 0.5)
 
     def test_fewer_than_two_resumes_have_nothing_to_compare(self):
         text = report(measure(_root({"acme/engineer": BILLING})))

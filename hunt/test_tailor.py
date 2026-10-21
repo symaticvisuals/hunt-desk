@@ -7,7 +7,7 @@ from unittest.mock import patch
 from hunt.cli import score_one
 from hunt.evaluated import read_csv
 from hunt.pdf import Compiled
-from hunt.tailor import new_numbers, resume_flag, save_tailored, tailor_one, tailored_folder
+from hunt.tailor import new_numbers, raw_prompt, resume_flag, save_tailored, tailor_one, tailored_folder
 
 JOB = {
     "company": "OpenAI",
@@ -187,3 +187,23 @@ class LatexTailorTests(unittest.TestCase):
         root = _root()
         self.assertEqual(save_tailored(root, JOB, {"experience": []}).code, 1)
         self.assertFalse(tailored_folder(root, JOB).exists())
+
+
+class RawPromptTests(unittest.TestCase):
+    def test_the_raw_prompt_has_no_placeholder_left(self):
+        root = _root()
+        text = raw_prompt(root, JOB)
+        self.assertNotIn("{{", text)
+        self.assertIn("Not scored", text)
+        self.assertIn("\\documentclass", text)
+        self.assertIn("Work with banks", text)
+        self.assertIn("Shipped 4 multi-agent systems", text)
+
+    def test_a_scored_role_carries_its_score(self):
+        root = _root()
+        (root / "data/evaluated-jobs.csv").write_text(
+            "date,company,role,base_score,penalties,final_score,applied,reached_interview,status,platform,job_id,url,source,location\n"
+            f"2026-10-21,OpenAI,FDE,84,production_systems,89,,,,ashby,1,{JOB['url']},ashby,NYC\n",
+            encoding="utf-8",
+        )
+        self.assertIn("final score 89", raw_prompt(root, JOB))

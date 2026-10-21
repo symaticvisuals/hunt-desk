@@ -602,6 +602,59 @@ def cmd_run(root: Path, args: list[str]) -> int:
     return completed.returncode
 
 
+def _find_job(root: Path, url: str) -> dict | None:
+    from hunt.inbox import load_jobs
+
+    return next((job for job in load_jobs(root) if url in [job.get("url"), job.get("apply_url"), *(job.get("also_at") or [])]), None)
+
+
+def cmd_resume(root: Path, args: list[str]) -> int:
+    from hunt.ats import report
+    from hunt.pdf import NoTeX
+    from hunt.tailor import check_tex, master_text, raw_prompt
+
+    if len(args) >= 2 and args[0] == "prompt":
+        job = _find_job(root, args[1])
+        if job is None:
+            print(f"No role in the inbox has the URL {args[1]}.")
+            return 1
+        print(raw_prompt(root, job))
+        return 0
+    if len(args) >= 2 and args[0] == "check":
+        path = Path(args[1])
+        if not path.is_file():
+            print(f"No file at {path}.")
+            return 1
+        job_text = None
+        if "--job" in args:
+            at = args.index("--job")
+            job = _find_job(root, args[at + 1]) if at + 1 < len(args) else None
+            if job is None:
+                print("No role in the inbox has that URL.")
+                return 1
+            job_text = job.get("description") or ""
+        tex = path.read_text(encoding="utf-8")
+        try:
+            compiled, checks, sizes = check_tex(tex, master_text(root), job_text)
+        except NoTeX as exc:
+            print(exc)
+            return 1
+        if not compiled.ok:
+            print("The TeX engine stopped:")
+            print(compiled.log_tail)
+            return 1
+        print(f"{compiled.pages} page{'s' if compiled.pages != 1 else ''}")
+        print(report(checks))
+        if compiled.pages > 1:
+            print("\nLines per section:")
+            for title, count in sizes.items():
+                print(f"  {title}: {count}")
+        return 0
+    print("Usage: hunt resume prompt <url>")
+    print("       hunt resume check <file.tex> [--job <url>]")
+    return 2
+
+
 def cmd_tex_check(root: Path) -> int:
     from hunt.latex import render
     from hunt.pdf import NoTeX, compile_tex, find_tex
@@ -686,6 +739,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_seed(root)
     if command == "tex-check":
         return cmd_tex_check(root)
-    print("Commands: search, tick, schedule, batch, sources, last, cleanup, dedupe, classify, setup, overleaf, workflows, run, score, paths, sameness, funnel, seed, tex-check")
+    if command == "resume":
+        return cmd_resume(root, argv[2:])
+    print("Commands: search, tick, schedule, batch, sources, last, cleanup, dedupe, classify, setup, overleaf, workflows, run, score, paths, sameness, funnel, seed, tex-check, resume")
     print("Run with no command to open the desk.")
     return 1

@@ -65,6 +65,7 @@ TAILOR_SCHEMA = _object(
 )
 RESUME_KEYS = ("candidate_level", "header", "summary", "experience", "projects", "education", "skills", "jd_keywords")
 HUMANIZER = "prompts/humanizer/SKILL.md"
+RAW_PROMPT = "prompts/latex-resume.md"
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?\+?%?")
 
 
@@ -199,6 +200,43 @@ def save_tailored(root: Path, job: dict, output: dict, *, compile=None) -> Tailo
     if added:
         message += f". Check these numbers, they are not in your master resume: {', '.join(added)}"
     return Tailored(0, message, folder, warn=not built or over or bool(failed))
+
+
+def _score_line(root: Path, job: dict) -> str:
+    from hunt.evaluated import read_csv
+
+    row = next((item for item in read_csv(root / "data/evaluated-jobs.csv") if item.get("url") == job.get("url")), None)
+    if row is None or not str(row.get("final_score") or "").strip():
+        return "Not scored"
+    return f"base score {row.get('base_score')}, penalties {row.get('penalties') or 'none'}, final score {row.get('final_score')}"
+
+
+def raw_prompt(root: Path, job: dict) -> str:
+    """The prompt someone can paste into Claude.ai to get the .tex back by hand."""
+    from hunt.latex import TEMPLATE
+
+    fills = {
+        "{{rules}}": RESUME_RULES.strip(),
+        "{{humanizer}}": humanizer_text(root),
+        "{{template}}": TEMPLATE.read_text(encoding="utf-8").strip(),
+        "{{master_resume}}": master_text(root).strip(),
+        "{{job}}": _job_text(job).strip(),
+        "{{score}}": _score_line(root, job),
+    }
+    text = (Path(__file__).resolve().parent.parent / RAW_PROMPT).read_text(encoding="utf-8")
+    for key, value in fills.items():
+        text = text.replace(key, value)
+    return text
+
+
+def check_tex(tex: str, master: str, job_text: str | None):
+    """Compile a pasted .tex and run the checks that need no priorities. Raises pdf.NoTeX."""
+    from hunt import ats, pdf
+
+    compiled = pdf.compile_tex(tex)
+    text = ats.pdf_text(compiled.pdf) if compiled.ok else ""
+    checks = ats.check(text, compiled.pages, ats.from_tex(tex), job_text, master) if compiled.ok else []
+    return compiled, checks, ats.section_sizes(tex)
 
 
 def resume_status(root: Path, job: dict) -> str:
