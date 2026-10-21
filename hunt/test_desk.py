@@ -32,7 +32,15 @@ def _root() -> Path:
         encoding="utf-8",
     )
     (directory / "profile/preferences.json").write_text(
-        json.dumps({"confirmed": True, "roles": ["engineer"], "seniority": [], "exclude_titles": ["intern"]}),
+        json.dumps(
+            {
+                "confirmed": True,
+                "roles": ["engineer"],
+                "seniority": [],
+                "exclude_titles": ["intern"],
+                "budget": {"classify_usd_per_day": 0.5, "score_usd_per_day": 3.0},
+            }
+        ),
         encoding="utf-8",
     )
     (directory / "data/watchlist.json").write_text("[]\n", encoding="utf-8")
@@ -159,6 +167,7 @@ def _local_proposal(root):
 
 def _pilot(root: Path, script, *, key: bool = True) -> None:
     from hunt.desk import HuntApp
+    from hunt.probe import Probe
 
     previous = os.environ.pop("ANTHROPIC_API_KEY", None)
     if key:
@@ -175,6 +184,7 @@ def _pilot(root: Path, script, *, key: bool = True) -> None:
             patch("hunt.launchd.installed", return_value=True),
             patch("hunt.schedule.run", side_effect=RuntimeError("no network in tests")),
             patch("hunt.preferences.propose", side_effect=_local_proposal),
+            patch("hunt.probe.run_probe", return_value=Probe(done=True)),
         ):
             asyncio.run(run())
     finally:
@@ -200,6 +210,39 @@ class DeskPilotTests(unittest.TestCase):
             self.assertIsInstance(app.screen, ResumeStep)
 
         _pilot(root, script)
+
+    def test_no_key_on_a_fresh_clone_opens_the_key_step_first(self):
+        from hunt.steps import KeyStep
+
+        root = _root()
+        (root / "profile/og-resume.md").write_text("PLACEHOLDER_RESUME\n", encoding="utf-8")
+
+        async def script(app, pilot):
+            self.assertIsInstance(app.screen, KeyStep)
+
+        _pilot(root, script, key=False)
+
+    def test_a_confirmed_checkout_without_a_budget_sees_the_caps_once(self):
+        from hunt.preferences import budget_set
+        from hunt.steps import BudgetScreen
+
+        root = _root()
+        prefs = json.loads((root / "profile/preferences.json").read_text())
+        prefs.pop("budget")
+        (root / "profile/preferences.json").write_text(json.dumps(prefs), encoding="utf-8")
+
+        async def first(app, pilot):
+            self.assertIsInstance(app.screen, BudgetScreen)
+            await pilot.click("#save-budget")
+            await _settle(app, pilot)
+            self.assertNotIsInstance(app.screen, BudgetScreen)
+
+        async def second(app, pilot):
+            self.assertNotIsInstance(app.screen, BudgetScreen)
+
+        _pilot(root, first)
+        self.assertTrue(budget_set(root))
+        _pilot(root, second)
 
     def test_use_as_is_saves_the_resume_and_moves_to_step_two(self):
         from textual.widgets import TextArea
@@ -303,6 +346,7 @@ class DeskPilotTests(unittest.TestCase):
             await _settle(app, pilot)
             saved = json.loads((root / "profile/preferences.json").read_text())
             self.assertTrue(saved["confirmed"])
+            self.assertEqual(saved["budget"], {"classify_usd_per_day": 0.5, "score_usd_per_day": 3.0})
             search = json.loads((root / "profile/search.json").read_text())
             self.assertEqual(search["location"]["mode"], "places")
             self.assertNotIsInstance(app.screen, PreferencesStep)

@@ -514,8 +514,8 @@ class HuntApp(App):
     #pref-roles { height: 7; }
     SelectionList { height: auto; max-height: 9; }
     .group { color: #e6b84d; text-style: bold; margin-top: 1; }
-    #pick-row, #pay-row, #step-buttons, #step-buttons-2, #classifier-row { height: auto; }
-    #pay-row Input { width: 1fr; }
+    #pick-row, #pay-row, #cap-row, #step-buttons, #step-buttons-2, #classifier-row { height: auto; }
+    #pay-row Input, #cap-row Input { width: 1fr; }
     #step-progress { height: 8; border: solid #3f3b36; }
     #schedule-lines { height: auto; color: #c8c2b8; }
     #wf-progress { height: 8; border: solid #3f3b36; }
@@ -553,6 +553,7 @@ class HuntApp(App):
         self.view = "main"
         self.hire_at = 80
         self._busy = False
+        self._key_asked = False
         self._ctx = None
         self._warned_rules = False
         self._scoring: dict[str, dict] = {}
@@ -580,15 +581,25 @@ class HuntApp(App):
         self.next_step()
 
     def next_step(self) -> None:
-        """Open the first unfinished step. With both done, show the jobs."""
-        from hunt.preferences import is_confirmed, migrate
+        """Open the first unfinished step: the key on a fresh clone, the resume, preferences, then the caps once.
+        With all done, show the jobs."""
+        from hunt.inbox import anthropic_key_present
+        from hunt.preferences import budget_set, is_confirmed, migrate
+        from hunt.steps import BudgetScreen, KeyStep
 
+        if not self._key_asked and needs_onboarding(self.root) and not anthropic_key_present(self.root):
+            self._key_asked = True
+            self.push_screen(KeyStep(self.root), lambda _saved: self.next_step())
+            return
         if needs_onboarding(self.root):
             self.push_screen(ResumeStep(self.root, can_leave=False), self._resume_done)
             return
         if not is_confirmed(self.root):
             migrate(self.root)
             self.push_screen(PreferencesStep(self.root, can_leave=False), self._preferences_done)
+            return
+        if not budget_set(self.root):
+            self.push_screen(BudgetScreen(self.root), lambda _saved: self.next_step())
             return
         self.reload()
         self._classify_open()
@@ -605,39 +616,21 @@ class HuntApp(App):
         if not saved:
             self.next_step()
             return
+        from datetime import datetime
+
+        from hunt.launchd import install, installed
+        from hunt.probe import merge_saved
+
+        added = merge_saved(self.root, datetime.now().astimezone())
         self.reload()
-        self.notify("Preferences saved. Checking the boards now.")
-        self.action_check()
-        self._offer_schedule()
-
-    def _offer_schedule(self) -> None:
-        from hunt.launchd import installed
-
-        if installed(self.root):
-            return
-
-        def answered(yes: bool | None) -> None:
-            if not yes:
-                self.notify("The schedule is off. Turn it on any time from Settings (,).")
-                return
-            from hunt.launchd import install
-
+        if not installed(self.root):
             try:
-                self.notify(install(self.root))
+                install(self.root)
+                self.notify("Background checks are on. Turn them off in Settings (,).")
             except RuntimeError as exc:
                 self.notify(str(exc), severity="error")
-            self._paint_summary()
-
-        self.push_screen(
-            ConfirmScreen(
-                "Keep checking the boards in the background?",
-                "launchd wakes every 15 minutes, skips 23:00 to 07:00, and fetches only boards that are due. "
-                "You get a notification when a new role is worth a look. Claude is never called in the background.",
-                "Turn schedule on",
-                "Not now",
-            ),
-            answered,
-        )
+        self.notify(f"Preferences saved. {added} roles from the count went straight to your list. Checking the boards now.")
+        self.action_check()
 
     def activity(self, message: str) -> None:
         try:

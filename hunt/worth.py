@@ -76,6 +76,18 @@ def load_rules(root: Path) -> tuple[dict, str]:
     return _merge(DEFAULT_RULES, custom if isinstance(custom, dict) else {}), ""
 
 
+def set_max_posted_days(root: Path, days: int) -> None:
+    """Step 2's age field. Only this rule is written; the rest keep falling back to the defaults."""
+    with data_lock(root):
+        try:
+            custom = read_json(root / RULES, {})
+        except json.JSONDecodeError:
+            custom = {}
+        custom = custom if isinstance(custom, dict) else {}
+        custom["max_posted_days"] = max(0, int(days))
+        write_json(root / RULES, custom)
+
+
 def load_companies(root: Path) -> dict[str, dict]:
     try:
         payload = read_json(root / COMPANIES, {})

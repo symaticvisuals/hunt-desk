@@ -189,6 +189,9 @@ class PreferencesStep(ModalScreen[bool]):
         super().__init__()
         self._root = root
         self._can_leave = can_leave
+        self._adjacent: list[str] = []
+        self._probing = False
+        self._recount = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="resume-dialog"):
@@ -198,6 +201,7 @@ class PreferencesStep(ModalScreen[bool]):
                 yield Label("Roles and seniority", classes="group")
                 yield Static("Target roles, one per line. A title matches when it has all of a role's key words in any order, so Full Stack Developer also finds Fullstack Engineer. The first four are searched on the job boards.", classes="hint")
                 yield TextArea("", id="pref-roles", show_line_numbers=False)
+                yield Static("", id="prefs-counts", classes="hint")
                 yield SelectionList[str](*[(level, level) for level in SENIORITY], id="pref-seniority")
                 yield Label("Most years a posting may ask for")
                 yield Input(id="pref-years", placeholder="5")
@@ -218,6 +222,14 @@ class PreferencesStep(ModalScreen[bool]):
                 yield SelectionList[str](*[(kind, kind) for kind in JOB_TYPES], id="pref-types")
                 yield Label("Titles to exclude, comma separated")
                 yield Input(id="pref-exclude", placeholder="intern, recruiter")
+                yield Label("Freshness", classes="group")
+                yield Label("Hide roles posted more than N days ago (0 keeps all)")
+                yield Input(id="pref-max-age", placeholder="0")
+                yield Label("Daily Claude budget", classes="group")
+                yield Static("Background checks sort, score, and write resumes on their own and stop for the day at each cap. 0 turns a step off.", classes="hint")
+                with Horizontal(id="cap-row"):
+                    yield Input(id="pref-classify-cap", placeholder="Sorting, USD per day")
+                    yield Input(id="pref-score-cap", placeholder="Scoring and resumes, USD per day")
             yield Button("Save preferences", variant="primary", id="save-prefs")
 
     def on_mount(self) -> None:
@@ -236,8 +248,74 @@ class PreferencesStep(ModalScreen[bool]):
 
     def _proposed(self, prefs: dict, note: str) -> None:
         self._fill(prefs)
+        self._adjacent = list(prefs.get("adjacent") or [])
         self.query_one("#prefs-note", Static).update(note)
         self.query_one("#save-prefs", Button).disabled = False
+        self._start_probe()
+
+    def _env(self) -> dict[str, str]:
+        load_env(self._root / ".env")
+        return dict(os.environ)
+
+    def _start_probe(self) -> None:
+        self._probing = True
+        self._refresh_counts()
+        self.run_worker(self._probe_worker, thread=True, group="probe")
+
+    def _probe_worker(self) -> None:
+        from hunt.probe import run_probe
+        from hunt.store import Busy
+
+        try:
+            run_probe(self._root, self._env(), self._form_prefs(), on_unit=lambda unit, ok: self.app.call_from_thread(self._refresh_counts))
+        except Busy:
+            self.app.call_from_thread(self.notify, "A check is running. Counts appear after the next one.")
+        except Exception as exc:
+            self.app.call_from_thread(self.notify, f"Counting stopped: {type(exc).__name__}: {exc}", severity="warning")
+        self.app.call_from_thread(self._probe_done)
+
+    def _probe_done(self) -> None:
+        self._probing = False
+        self._refresh_counts()
+
+    def _refresh_counts(self) -> None:
+        from datetime import date
+
+        from hunt.preferences import compiled_search, normalize
+        from hunt.probe import count_lines
+        from hunt.probe import load as load_probe
+        from hunt.search import load_search
+
+        prefs = normalize(self._form_prefs())
+        try:
+            rule = compiled_search(prefs, load_search(self._root))
+        except Exception:
+            return
+        lines = count_lines(load_probe(self._root), prefs["roles"], rule, self._adjacent, date.today(), running=self._probing)
+        self.query_one("#prefs-counts", Static).update("\n".join(lines))
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        self._schedule_recount()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id in {"pref-cities", "pref-countries", "pref-remote-countries"}:
+            self._schedule_recount()
+
+    def _schedule_recount(self) -> None:
+        if self._recount is not None:
+            self._recount.stop()
+        self._recount = self.set_timer(0.5, self._refresh_counts)
+
+    def _form_prefs(self) -> dict:
+        """The form as it stands, unvalidated, for counting."""
+        return {
+            "roles": [line.strip() for line in self.query_one("#pref-roles", TextArea).text.splitlines() if line.strip()],
+            "cities": _split(self.query_one("#pref-cities", Input).value),
+            "countries": _split(self.query_one("#pref-countries", Input).value),
+            "remote_only_countries": _split(self.query_one("#pref-remote-countries", Input).value),
+            "work_modes": list(self.query_one("#pref-modes", SelectionList).selected),
+            "exclude_titles": _split(self.query_one("#pref-exclude", Input).value),
+        }
 
     def _fill(self, prefs: dict) -> None:
         self.query_one("#pref-roles", TextArea).load_text("\n".join(prefs["roles"]))
@@ -253,6 +331,12 @@ class PreferencesStep(ModalScreen[bool]):
         self.query_one("#pref-size", Select).value = prefs["company_size"]
         self._choose("#pref-types", prefs["job_types"])
         self.query_one("#pref-exclude", Input).value = ", ".join(prefs["exclude_titles"])
+        budget = prefs.get("budget") or {}
+        self.query_one("#pref-classify-cap", Input).value = f"{budget.get('classify_usd_per_day', 0.5):g}"
+        self.query_one("#pref-score-cap", Input).value = f"{budget.get('score_usd_per_day', 3.0):g}"
+        from hunt.worth import load_rules
+
+        self.query_one("#pref-max-age", Input).value = str(load_rules(self._root)[0].get("max_posted_days") or 0)
 
     def _choose(self, selector: str, values: list[str]) -> None:
         widget = self.query_one(selector, SelectionList)
@@ -277,8 +361,14 @@ class PreferencesStep(ModalScreen[bool]):
         try:
             years_value = int(years) if years else None
             pay_value = float(pay) if pay else None
+            max_age = int(self.query_one("#pref-max-age", Input).value.strip() or 0)
+            classify_cap = float(self.query_one("#pref-classify-cap", Input).value.strip() or 0)
+            score_cap = float(self.query_one("#pref-score-cap", Input).value.strip() or 0)
         except ValueError:
-            self.notify("Years and pay must be numbers.", severity="error")
+            self.notify("Years, pay, age, and caps must be numbers.", severity="error")
+            return
+        if min(max_age, classify_cap, score_cap) < 0:
+            self.notify("Age and caps cannot be negative.", severity="error")
             return
         modes = list(self.query_one("#pref-modes", SelectionList).selected)
         if not modes:
@@ -298,9 +388,118 @@ class PreferencesStep(ModalScreen[bool]):
                 "company_size": str(self.query_one("#pref-size", Select).value),
                 "job_types": list(self.query_one("#pref-types", SelectionList).selected),
                 "exclude_titles": _split(self.query_one("#pref-exclude", Input).value),
+                "adjacent": [role for role in self._adjacent if role in roles],
+                "budget": {"classify_usd_per_day": classify_cap, "score_usd_per_day": score_cap},
             },
         )
+        from hunt.worth import set_max_posted_days
+
+        set_max_posted_days(self._root, max_age)
         self.dismiss(True)
+
+
+class KeyStep(ModalScreen[bool]):
+    """Before Step 1 on a fresh clone: the Anthropic API key, or skip."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__()
+        self._root = root
+
+    def compose(self) -> ComposeResult:
+        from hunt.preferences import DEFAULT_BUDGET
+
+        with Vertical(id="dialog"):
+            yield Label("Before you start · Anthropic API key")
+            yield Static(
+                "Claude reads your resume to suggest roles, sorts new postings, scores the ones worth a look, and writes "
+                "a one-page resume for the best of them. Background spend stops for the day at "
+                f"${DEFAULT_BUDGET['classify_usd_per_day']:.2f} for sorting and ${DEFAULT_BUDGET['score_usd_per_day']:.2f} "
+                "for scoring and resumes. You can change both in Step 2. The key is saved in .env and never printed.",
+                classes="hint",
+            )
+            yield Input(placeholder="sk-ant-...", password=True, id="key-input")
+            with Horizontal(id="step-buttons"):
+                yield Button("Save key", variant="primary", id="key-save")
+                yield Button("Skip for now", id="key-skip")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        from hunt.inbox import store_anthropic_key
+
+        if event.button.id == "key-skip":
+            self.dismiss(False)
+            return
+        value = self.query_one("#key-input", Input).value.strip()
+        if not value:
+            self.notify("Paste a key, or skip for now.")
+            return
+        store_anthropic_key(self._root, value)
+        self.dismiss(True)
+
+
+class BudgetScreen(ModalScreen[bool]):
+    """The two daily caps, shown once to a checkout that saved preferences before caps existed."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__()
+        self._root = root
+
+    def compose(self) -> ComposeResult:
+        prefs = load(self._root)
+        budget = prefs["budget"] if prefs else {}
+        with Vertical(id="dialog"):
+            yield Label("Daily Claude budget")
+            yield Static(
+                "Background checks now sort, score, and write resumes on their own. Each stops for the day at its cap. "
+                "A cap of 0 turns that step off.",
+                classes="hint",
+            )
+            yield Label("Sorting new roles, USD per day")
+            yield Input(value=f"{budget.get('classify_usd_per_day', 0.5):g}", id="budget-classify")
+            yield Label("Scoring and resumes, USD per day")
+            yield Input(value=f"{budget.get('score_usd_per_day', 3.0):g}", id="budget-score")
+            yield Button("Save caps", variant="primary", id="save-budget")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        from hunt.preferences import save_budget
+
+        if event.button.id != "save-budget":
+            return
+        try:
+            classify = float(self.query_one("#budget-classify", Input).value.strip() or 0)
+            score = float(self.query_one("#budget-score", Input).value.strip() or 0)
+        except ValueError:
+            self.notify("Caps must be numbers.", severity="error")
+            return
+        if classify < 0 or score < 0:
+            self.notify("Caps cannot be negative.", severity="error")
+            return
+        save_budget(self._root, {"classify_usd_per_day": classify, "score_usd_per_day": score})
+        self.dismiss(True)
+
+
+class ChoiceScreen(ModalScreen[str | None]):
+    """A question with several answers. Returns the chosen id, or None on escape."""
+
+    def __init__(self, question: str, detail: str, choices: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self._question = question
+        self._detail = detail
+        self._choices = choices
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(self._question, id="choice-question")
+            yield Static(self._detail, classes="hint")
+            with Horizontal(id="step-buttons"):
+                for index, (choice, label) in enumerate(self._choices):
+                    yield Button(label, variant="primary" if index == 0 else "default", id=f"choice-{choice}")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss((event.button.id or "").removeprefix("choice-") or None)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
 
 
 class ConfirmScreen(ModalScreen[bool]):

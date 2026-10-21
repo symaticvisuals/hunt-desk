@@ -106,6 +106,16 @@ class WorthTests(unittest.TestCase):
         self.assertEqual(rules["company_words"]["staffing"], ["agency"])
         self.assertEqual(rules["company_words"]["training"], DEFAULT_RULES["company_words"]["training"])
 
+    def test_set_max_posted_days_writes_only_that_rule(self):
+        from hunt.worth import set_max_posted_days
+
+        root = Path(tempfile.mkdtemp())
+        set_max_posted_days(root, 2)
+        self.assertEqual(json.loads((root / "profile/worth.json").read_text(encoding="utf-8")), {"max_posted_days": 2})
+        self.assertEqual(load_rules(root)[0]["old_when_found_days"], 14)
+        set_max_posted_days(root, 0)
+        self.assertEqual(load_rules(root)[0]["max_posted_days"], 0)
+
     def test_the_shipped_rules_file_matches_the_defaults(self):
         shipped = json.loads((Path(__file__).resolve().parent.parent / "profile/defaults/worth.json").read_text(encoding="utf-8"))
         self.assertEqual(shipped, DEFAULT_RULES)
