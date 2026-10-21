@@ -6,6 +6,7 @@ from pathlib import Path
 
 from hunt.rewrite_api import DEFAULT_STEPS
 from hunt.seed import seed
+from hunt.spend import DEFAULT_PRICES
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -47,6 +48,7 @@ class SeedTests(unittest.TestCase):
         self.assertEqual((search["keywords"], search["source_options"]["jobspy"]["hours_old"]), ([], 48))
         models = json.loads((REPO / "profile/defaults/models.json").read_text(encoding="utf-8"))
         self.assertEqual((models["classifier"], models["steps"]), ("haiku", DEFAULT_STEPS))
+        self.assertEqual({name: rate for name, rate in models["prices"].items() if name != "checked"}, DEFAULT_PRICES)
 
 
 if __name__ == "__main__":

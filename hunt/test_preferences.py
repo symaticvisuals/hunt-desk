@@ -4,7 +4,9 @@ import unittest
 from pathlib import Path
 
 from hunt.preferences import (
+    DEFAULT_BUDGET,
     PREFERENCES_SYSTEM,
+    budget_set,
     compile_preferences,
     is_confirmed,
     job_type_ok,
@@ -15,6 +17,7 @@ from hunt.preferences import (
     places_ok,
     propose,
     save,
+    save_budget,
     seniority_ok,
     seniority_of,
     size_ok,
@@ -64,6 +67,23 @@ class PreferenceFileTests(unittest.TestCase):
         self.assertEqual(prefs["work_modes"], ["onsite", "hybrid", "remote"])
         self.assertFalse(is_confirmed(root))
         self.assertEqual(migrate(root), load(root))
+
+    def test_budget_defaults_and_bounds(self):
+        self.assertEqual(normalize({})["budget"], DEFAULT_BUDGET)
+        self.assertEqual(
+            normalize({"budget": {"classify_usd_per_day": -1, "score_usd_per_day": "2"}})["budget"],
+            {"classify_usd_per_day": 0.5, "score_usd_per_day": 2.0},
+        )
+
+    def test_budget_set_reads_the_file_and_save_budget_touches_only_the_budget(self):
+        root = _root()
+        (root / "profile/preferences.json").write_text(json.dumps({"confirmed": True, "roles": ["PM"]}), encoding="utf-8")
+        self.assertFalse(budget_set(root))
+        save_budget(root, {"classify_usd_per_day": 0.2, "score_usd_per_day": 1})
+        self.assertTrue(budget_set(root))
+        self.assertEqual(load(root)["roles"], ["PM"])
+        self.assertTrue(load(root)["confirmed"])
+        self.assertEqual(load(root)["budget"], {"classify_usd_per_day": 0.2, "score_usd_per_day": 1.0})
 
     def test_normalize_drops_unknown_values(self):
         prefs = normalize({"seniority": ["senior", "wizard"], "work_modes": ["remote", "space"], "company_size": "huge", "max_years": "7"})

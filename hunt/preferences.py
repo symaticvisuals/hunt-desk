@@ -13,6 +13,7 @@ SENIORITY = ("junior", "mid", "senior", "lead", "staff", "principal", "leadershi
 WORK_MODES = ("onsite", "hybrid", "remote")
 JOB_TYPES = ("fulltime", "parttime", "contract", "internship")
 SIZES = ("any", "startup", "big")
+DEFAULT_BUDGET = {"classify_usd_per_day": 0.5, "score_usd_per_day": 3.0}
 ALIASES = {
     "bangalore": ("bengaluru",),
     "gurgaon": ("gurugram",),
@@ -121,6 +122,7 @@ def defaults() -> dict:
         "company_size": "any",
         "job_types": [],
         "exclude_titles": ["intern", "internship"],
+        "budget": dict(DEFAULT_BUDGET),
     }
 
 
@@ -177,6 +179,10 @@ def normalize(raw: dict) -> dict:
         "currency": str(floor.get("currency") or "").strip().upper(),
         "period": period if period in {"year", "month"} else "year",
     }
+    budget = raw.get("budget") if isinstance(raw.get("budget"), dict) else {}
+    for name, fallback in DEFAULT_BUDGET.items():
+        value = _number(budget.get(name))
+        prefs["budget"][name] = float(value) if value is not None and value >= 0 else fallback
     return prefs
 
 
@@ -193,6 +199,27 @@ def load(root: Path) -> dict | None:
 def is_confirmed(root: Path) -> bool:
     prefs = load(root)
     return bool(prefs and prefs["confirmed"])
+
+
+def budget_set(root: Path) -> bool:
+    """The person has seen and saved the daily caps. Until then the background does not score or tailor."""
+    try:
+        raw = read_json(root / PREFERENCES, {})
+    except json.JSONDecodeError:
+        return False
+    return isinstance(raw, dict) and isinstance(raw.get("budget"), dict)
+
+
+def save_budget(root: Path, budget: dict) -> dict:
+    try:
+        raw = read_json(root / PREFERENCES, {})
+    except json.JSONDecodeError:
+        raw = {}
+    raw = raw if isinstance(raw, dict) else {}
+    raw["budget"] = dict(budget)
+    prefs = normalize(raw)
+    write_json(root / PREFERENCES, prefs)
+    return prefs
 
 
 def migrate(root: Path) -> dict:
