@@ -1,0 +1,21 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+data/last-search.json
+data/score-one.json
+data/jev-cache.json
+data/laya-cache.json
+data/clef-cache.json
+data/resume-rewrite.md
+data/resume-answers.md
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+resumes/overleaf/
+resumes/updated-resume.md
+profile/og-resume.md.bak
+
+# Brainstorming specs and implementation plans stay local.
+docs/superpowers/
