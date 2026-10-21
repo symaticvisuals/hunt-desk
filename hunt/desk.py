@@ -27,7 +27,8 @@ from hunt.inbox import (
 )
 from hunt.onboard import needs_onboarding
 from hunt.sources import SourceError, load_env
-from hunt.steps import AnswerScreen, ConfirmScreen, PreferencesStep, ResumeStep, SettingsScreen
+from hunt.steps import AnswerScreen, ChoiceScreen, ConfirmScreen, PreferencesStep, ResumeStep, SettingsScreen
+from hunt.tailor import resume_flag, resume_status, tailored_folder
 from hunt.trim import removed_boilerplate, shorten
 from hunt.workflows import Workflow, command, discover
 
@@ -260,7 +261,11 @@ class HelpScreen(ModalScreen[None]):
                         "",
                         "o   open the apply link",
                         "s   score with Claude",
-                        "A   score every unscored role on the list in one Batch API batch",
+                        "A   score every unscored role on the list in one Batch API batch, within today's budget",
+                        "t   tailor a scored role now: a one-page PDF resume",
+                        "v   open the role's resume PDF",
+                        "y   copy a prompt to paste into Claude.ai for this role's LaTeX resume",
+                        "⚠   on a score: the resume PDF did not build, ran over a page, or failed an ATS check",
                         "a   I applied (moves it to the Applied view)",
                         "u   undo applied (in the Applied view)",
                         "x   not for me (stays hidden, even if it is posted again)",
@@ -527,6 +532,9 @@ class HuntApp(App):
         Binding("o", "open", "Open"),
         Binding("s", "score", "Score"),
         Binding("A", "process_all", "Score all"),
+        Binding("t", "tailor_now", "Tailor"),
+        Binding("v", "view_pdf", "PDF"),
+        Binding("y", "copy_prompt", "Prompt", show=False),
         Binding("a", "applied", "Applied"),
         Binding("u", "undo_applied", "Undo applied"),
         Binding("x", "dismiss_role", "Not for me"),
@@ -681,7 +689,11 @@ class HuntApp(App):
         table.clear(columns=True)
         if self.view == "hidden":
             table.add_columns("Company", "Role", "Why hidden", "Source")
-            rows = [(job, reason) for job, reason in self.hidden]
+            from hunt import spend
+            from hunt.pipeline import shown_reason
+
+            classify_room = spend.room(self.root, "classify")
+            rows = [(job, shown_reason(job, reason, self._in_batch, classify_room)) for job, reason in self.hidden]
         elif self.view == "applied":
             table.add_columns("Company", "Role", "Status", "Date")
             rows = [(job, job.get("status") or "Applied") for job in self.applied]
@@ -700,6 +712,8 @@ class HuntApp(App):
                 third = Text("batch", style="#8a847c")
             else:
                 third = _score_cell(job, self.hire_at)
+                if resume_flag(self.root, job):
+                    third = Text.assemble(third, (" ⚠", "#e6b84d"))
             fourth = job.get("date") if self.view == "applied" else job.get("source")
             role = _clip(job.get("title") or job.get("role") or "", 42)
             if self.view == "main" and self._worth(job).verdict == "maybe":
@@ -728,7 +742,14 @@ class HuntApp(App):
             parts.append(f"queued {len(self._queue)}")
         if self._in_batch:
             parts.append(f"batch {len(self._in_batch)}")
-        upcoming = next_check(self.root, _env(self.root))
+        env = _env(self.root)
+        if (env.get("ANTHROPIC_API_KEY") or "").strip():
+            from hunt.spend import summary
+
+            parts.append(summary(self.root))
+        else:
+            parts.append("no API key · Settings (,) → API keys")
+        upcoming = next_check(self.root, env)
         if upcoming is not None:
             parts.append(f"next check {upcoming.astimezone().strftime('%H:%M')}")
         last = load_state(self.root).get("last_tick")
@@ -750,8 +771,6 @@ class HuntApp(App):
             return
         self.query_one("#detail-kicker", Static).update(_meta(job))
         self.query_one("#detail-title", Static).update(job.get("title") or job.get("role") or "")
-        from hunt.tailor import tailored_folder
-
         line = _score_line(job, self.hire_at) + "   " + _jev_line(job)
         years = _years_note(job)
         if years:
@@ -759,9 +778,9 @@ class HuntApp(App):
         worth = self._worth(job)
         if worth.verdict in {"maybe", "skip"}:
             line += "\n" + _worth_line(worth)
-        resume = tailored_folder(self.root, job) / "resume.md"
-        if resume.exists():
-            line += f"   tailored: {resume.relative_to(self.root)}"
+        status = resume_status(self.root, job)
+        if status:
+            line += f"   tailored: {status}"
         self.query_one("#detail-score", Static).update(line)
         body = _posting(job)
         if len(body) > 1800:
@@ -995,35 +1014,63 @@ class HuntApp(App):
         if not todo:
             self.notify("Every role on the main list is already scored or on its way.")
             return
+        from hunt import spend
+        from hunt.batch import estimates
 
-        def answered(yes: bool | None) -> None:
-            if yes:
-                self.ask_anthropic_key(lambda: self.ensure_workspace(lambda: self._send_batch(todo)))
+        room = spend.room(self.root, "score")
+        fit, total = 0, 0.0
+        for cost in estimates(self.root, "score", todo):
+            if total + cost > room + 1e-12:
+                break
+            total += cost
+            fit += 1
+
+        def send(enforce: bool) -> None:
+            self.ask_anthropic_key(lambda: self.ensure_workspace(lambda: self._send_batch(todo, enforce)))
+
+        if fit == len(todo):
+            self.push_screen(
+                ConfirmScreen(
+                    f"Score all {len(todo)} roles through the Batch API?",
+                    "One batch at half the API price, billed to the ANTHROPIC_API_KEY in .env, within today's score budget "
+                    f"(${room:.2f} left). Results usually arrive within an hour; the desk and the schedule pick them up. "
+                    "Roles above the cutoff then go into a second batch that writes one-page PDF resumes.",
+                    "Send batch",
+                    "Cancel",
+                ),
+                lambda yes: send(True) if yes else None,
+            )
+            return
+        choices = ([("send-fit", f"Send {fit}")] if fit else []) + [("send-all", f"Send all {len(todo)} anyway"), ("cancel", "Cancel")]
+
+        def chosen(choice: str | None) -> None:
+            if choice == "send-fit":
+                send(True)
+            elif choice == "send-all":
+                send(False)
 
         self.push_screen(
-            ConfirmScreen(
-                f"Score all {len(todo)} roles through the Batch API?",
-                "One batch at half the API price, billed to the ANTHROPIC_API_KEY in .env (roughly $0.05 a role). "
-                "Results usually arrive within an hour; the desk and the schedule pick them up. "
-                "Roles above 75 then go into a second batch that writes tailored resumes.",
-                "Send batch",
-                "Cancel",
+            ChoiceScreen(
+                f"{fit} of {len(todo)} roles fit today's score budget (${room:.2f} left).",
+                "Estimates are upper bounds, so the real bill is usually far lower. Sending all of them goes past today's cap, "
+                "and background scoring then waits for tomorrow.",
+                choices,
             ),
-            answered,
+            chosen,
         )
 
-    def _send_batch(self, jobs: list[dict]) -> None:
+    def _send_batch(self, jobs: list[dict], enforce: bool = True) -> None:
         self.activity(f"Sending {len(jobs)} roles to the Batch API…")
 
         def work() -> None:
-            from hunt.batch import BatchError, submit_scores
+            from hunt.batch import BatchError, submit
 
             try:
-                batch_id = submit_scores(self.root, jobs)
+                batch_id, count = submit(self.root, "score", jobs, enforce=enforce)
             except BatchError as exc:
                 self.call_from_thread(self.notify, str(exc), severity="error")
                 return
-            self.call_from_thread(self._batch_sent, batch_id, len(jobs))
+            self.call_from_thread(self._batch_sent, batch_id, count)
 
         self.run_worker(work, thread=True, group="batch", exclusive=False)
 
@@ -1119,6 +1166,78 @@ class HuntApp(App):
         if job is None or self.view == "applied":
             return
         self._mark(job)
+
+    def action_tailor_now(self) -> None:
+        job = self._selected()
+        if job is None:
+            self.notify("Highlight a role first")
+            return
+        if not str(job.get("final_score") or "").strip():
+            self.notify("Score this role first (s). Tailoring starts from its score.")
+            return
+        import shutil
+
+        from hunt import spend
+        from hunt.batch import estimate_now
+
+        if shutil.which("claude") is None:
+            cost = estimate_now(self.root, "tailor", job)
+            left = spend.room(self.root, "tailor")
+            if cost > left:
+                self.push_screen(
+                    ConfirmScreen(
+                        "This goes past today's score and resume budget.",
+                        f"Up to ${cost:.2f} at full price with ${left:.2f} left today.",
+                        "Tailor anyway",
+                        "Cancel",
+                    ),
+                    lambda yes: self._start_tailor(job) if yes else None,
+                )
+                return
+        self._start_tailor(job)
+
+    def _start_tailor(self, job: dict) -> None:
+        self.activity(f"Tailoring {job.get('company') or 'company'} — {job.get('title') or 'role'}…")
+
+        def work() -> None:
+            from hunt.tailor import tailor_now
+
+            made = tailor_now(self.root, job)
+            self.call_from_thread(self._score_done, job, made.message, made.code != 0)
+
+        self.run_worker(work, thread=True, group="score", exclusive=False)
+
+    def action_copy_prompt(self) -> None:
+        job = self._selected()
+        if job is None:
+            self.notify("Highlight a role first")
+            return
+        import shutil
+        import subprocess
+
+        from hunt.tailor import raw_prompt
+
+        text = raw_prompt(self.root, job)
+        if shutil.which("pbcopy"):
+            subprocess.run(["pbcopy"], input=text, text=True, check=False)
+            self.notify("Prompt copied. Paste it into Claude.ai, then check the .tex with: hunt resume check <file>")
+            return
+        path = self.root / "data/prompt.md"
+        path.write_text(text, encoding="utf-8")
+        self.notify(f"No clipboard tool here. The prompt is in {path.relative_to(self.root)}.")
+
+    def action_view_pdf(self) -> None:
+        job = self._selected()
+        if job is None:
+            self.notify("Highlight a role first")
+            return
+        import subprocess
+
+        pdf = tailored_folder(self.root, job) / "resume.pdf"
+        if not pdf.exists():
+            self.notify("No PDF for this role yet.")
+            return
+        subprocess.run(["open", str(pdf)], check=False)
 
     def action_undo_applied(self) -> None:
         job = self._selected()

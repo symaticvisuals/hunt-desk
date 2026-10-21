@@ -498,17 +498,17 @@ class ProcessAllTests(unittest.TestCase):
         root = self._root_with_six()
         sent = []
 
-        def submit(_root, jobs, **_kwargs):
+        def submit(_root, kind, jobs, **_kwargs):
             sent.append([job["url"] for job in jobs])
             from hunt.batch import BATCHES
             from hunt.store import write_json
 
-            write_json(_root / BATCHES, [{"id": "msgbatch_1", "kind": "score", "status": "open", "jobs": {str(n): job for n, job in enumerate(jobs)}}])
-            return "msgbatch_1"
+            write_json(_root / BATCHES, [{"id": "msgbatch_1", "kind": kind, "status": "open", "jobs": {str(n): job for n, job in enumerate(jobs)}}])
+            return "msgbatch_1", len(jobs)
 
         async def script(app, pilot):
             self.assertEqual(len(app.shown), 6)
-            with patch("hunt.batch.submit_scores", side_effect=submit), patch("hunt.claude_client.lookup_workspace", return_value=WorkspaceLookup(selected="wrkspc_1")):
+            with patch("hunt.batch.submit", side_effect=submit), patch("hunt.claude_client.lookup_workspace", return_value=WorkspaceLookup(selected="wrkspc_1")):
                 await pilot.press("A")
                 await pilot.pause()
                 self.assertIsInstance(app.screen, ConfirmScreen)
@@ -520,6 +520,40 @@ class ProcessAllTests(unittest.TestCase):
             await pilot.press("s")
             await pilot.pause()
             self.assertEqual(app._scoring, {})
+
+        _pilot(root, script)
+
+    def test_score_all_over_the_cap_offers_to_send_what_fits_or_everything(self):
+        from hunt.steps import ChoiceScreen
+
+        root = self._root_with_six()
+        prefs = json.loads((root / "profile/preferences.json").read_text())
+        prefs["budget"] = {"classify_usd_per_day": 0.5, "score_usd_per_day": 0.01}
+        (root / "profile/preferences.json").write_text(json.dumps(prefs), encoding="utf-8")
+
+        async def script(app, pilot):
+            with patch("hunt.batch.estimates", return_value=[0.006] * 6):
+                await pilot.press("A")
+                await pilot.pause()
+            self.assertIsInstance(app.screen, ChoiceScreen)
+            self.assertIn("1 of 6 roles fit", str(app.screen.query_one("#choice-question").render()))
+            self.assertEqual(len(app.screen.query("#choice-send-all")), 1)
+
+        _pilot(root, script)
+
+    def test_a_flagged_resume_shows_a_warning_marker(self):
+        from hunt.tailor import tailored_folder
+
+        root = self._root_with_six()
+
+        async def script(app, pilot):
+            job = app.shown[0]
+            folder = tailored_folder(root, job)
+            folder.mkdir(parents=True)
+            (folder / "ats.json").write_text(json.dumps({"pdf": False, "pages": 0, "failed": [], "over": False}), encoding="utf-8")
+            app.reload()
+            await pilot.pause()
+            self.assertIn("⚠", str(app.query_one("#jobs").get_cell_at((0, 2))))
 
         _pilot(root, script)
 
