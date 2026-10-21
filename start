@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# One command for a fresh clone: install what is missing, copy the starting files, open the desk.
+# Safe to run again. Each step says what it did. --no-tex skips the TeX engine.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+NO_TEX=0
+for arg in "$@"; do
+  [ "$arg" = "--no-tex" ] && NO_TEX=1
+done
+
+step() { printf '\n· %s\n' "$1"; }
+fail() {
+  printf '\nStopped at: %s\nRun it again with: %s\n' "$1" "$2" >&2
+  exit 1
+}
+
+export PATH="$HOME/.local/bin:$PATH"
+
+step "uv"
+if command -v uv >/dev/null 2>&1; then
+  echo "already installed"
+else
+  curl -LsSf https://astral.sh/uv/install.sh | sh || fail "installing uv" "curl -LsSf https://astral.sh/uv/install.sh | sh"
+fi
+
+step "Python packages"
+uv sync || fail "uv sync" "uv sync"
+
+step "TeX engine for the PDF resumes"
+if [ "$NO_TEX" = 1 ]; then
+  echo "skipped (--no-tex). Resumes are written as .tex until an engine is installed."
+elif uv run python -c "from hunt.pdf import find_tex; raise SystemExit(0 if find_tex() else 1)"; then
+  echo "already installed"
+else
+  echo "Installing Tectonic into ~/.local/bin (about 30 MB, no sudo)."
+  work=$(mktemp -d)
+  (cd "$work" && curl --proto '=https' --tlsv1.2 -fsSL https://drop-sh.fullyjustified.net | sh) \
+    || fail "installing Tectonic" "./start"
+  mkdir -p "$HOME/.local/bin"
+  mv "$work/tectonic" "$HOME/.local/bin/tectonic" || fail "installing Tectonic" "./start"
+fi
+
+step "Starting files"
+uv run python -m hunt seed || fail "copying the starting files" "uv run python -m hunt seed"
+
+if [ "$NO_TEX" = 0 ]; then
+  step "Checking the TeX engine (first run downloads its packages)"
+  uv run python -m hunt tex-check || echo "The TeX check failed. Resumes are kept as .tex until it passes: uv run python -m hunt tex-check"
+fi
+
+step "Opening the desk"
+exec uv run python -m hunt
