@@ -231,6 +231,7 @@ def run(
         _classify(root, now, report, classifier, result, env)
         _check_live(root, now, report, checker)
         _advance(root, now, report, env, result)
+        _prune(root, now, report)
         result.announced = _mark_visible(root, now)
         if result.announced and notify and not first_run:
             send = notifier
@@ -251,6 +252,18 @@ def _advance(root: Path, now: datetime, report, env: dict[str, str], result: Run
     for error in (pipeline.tailor_stage(root, now, report, env), pipeline.score_stage(root, now, report, env)):
         if error:
             result.errors.append(error)
+
+
+def _prune(root: Path, now: datetime, report) -> None:
+    from hunt.prune import prune
+
+    try:
+        counts = prune(root, now.date())
+    except Busy:
+        report("prune skipped: the job files are busy")
+        return
+    if counts["roles"]:
+        report(f"pruned {counts['roles']} old roles")
 
 
 def _advance_idle(root: Path, now: datetime, env: dict[str, str]) -> None:

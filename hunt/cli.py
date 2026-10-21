@@ -150,12 +150,19 @@ def cmd_last(root: Path) -> int:
 
 
 def cmd_cleanup(root: Path) -> int:
+    from hunt.prune import prune
+
     path = root / "data/evaluated-jobs.csv"
     rows = read_csv(path)
     kept, removed = cleanup_rows(rows)
     if removed:
         write_csv(path, kept)
     print(f"removed {removed} duplicate rows. {len(kept)} rows remain.")
+    counts = prune(root)
+    print(
+        f"pruned {counts['roles']} old roles, {counts['decisions']} classifier decisions for roles no longer kept, "
+        f"and the posting copies in {counts['batches']} finished batches."
+    )
     return 0
 
 

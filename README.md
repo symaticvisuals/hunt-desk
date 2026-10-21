@@ -9,7 +9,7 @@ The shape comes from [How to Build a Job Hunt System with Claude Code](https://w
 ## How it works
 
 1. **Fetch.** Every 15 minutes a background check pulls new postings from the boards that are due: the Greenhouse, Lever, Ashby, and Workday boards of companies on your watchlist, keyless job feeds, any keyed APIs you add, and JobSpy.
-2. **Screen.** Plain Python hides roles with the wrong title, place, seniority, job type, pay, company size, or posting age. It also hides staffing and training firms and US remote roles you cannot take. Nothing is deleted, and `h` shows each hidden role with the reason.
+2. **Screen.** Plain Python hides roles with the wrong title, place, seniority, job type, pay, company size, or posting age. It also hides staffing and training firms and US remote roles you cannot take. `h` shows each hidden role with the reason. Roles hidden for age or because they closed are removed at the end of each check, and a board cannot add them back.
 3. **Sort.** Claude Haiku reads your resume and the posting, names the deciding fact, and says keep or skip. Clef-flash can do this on your machine instead.
 4. **Score.** Claude scores each kept role from 0 to 100 against your resume, using only the rules in `profile/rubric.json`.
 5. **Tailor.** Each role above the cutoff gets a one-page PDF resume, and an ATS check reads the text back out of the PDF.
@@ -122,7 +122,7 @@ Folders from before the PDF output hold `resume.md` and are left as they are.
 
 ## Background checks
 
-Saving preferences turns on a launchd agent that runs `hunt tick` every 15 minutes and once at login. A tick skips quiet hours (23:00 to 07:00 by default) and fetches only the boards that are due. It sorts the new roles, checks that shortlisted postings are still open, and sends a macOS notification when a role newly reaches the list. Then it tailors and scores within the daily caps. With both caps at 0, a tick never calls Claude. Each board's interval adapts: faster when it finds new roles, slower after empty runs, and backed off when it is blocked.
+Saving preferences turns on a launchd agent that runs `hunt tick` every 15 minutes and once at login. A tick skips quiet hours (23:00 to 07:00 by default) and fetches only the boards that are due. It sorts the new roles, checks that shortlisted postings are still open, and sends a macOS notification when a role newly reaches the list. Then it tailors and scores within the daily caps, and removes roles hidden for age or because they closed. With both caps at 0, a tick never calls Claude. Each board's interval adapts: faster when it finds new roles, slower after empty runs, and backed off when it is blocked.
 
 Turn it off or on in Settings (`,`), or from a terminal:
 
@@ -230,7 +230,7 @@ Every command runs as `uv run python -m hunt <command>`:
 | `sameness` | How much tailored resumes share, line by line |
 | `funnel` | Where every inbox role ends up, stage by stage |
 | `last` | Lists the roles in the last search |
-| `cleanup` | Removes duplicate rows from `data/evaluated-jobs.csv` |
+| `cleanup` | Removes duplicate scored rows, then the old roles and stored data a check would prune |
 | `seed` | Copies the shipped defaults into place. It never overwrites |
 | `tex-check` | Compiles a sample resume to test the TeX engine |
 | `paths` | Prints the files you can edit by hand |

@@ -199,9 +199,12 @@ def collect(
         result.jobs.extend(placed)
 
     _hydrate(result)
+    from hunt.store import load_pruned
+
     existing = read_csv(root / ROOT_FILES["evaluated"])
+    pruned = load_pruned(root)
     statuses = classify([job.as_dict() for job in result.jobs], existing)
-    new_jobs = [job for job, status in zip(result.jobs, statuses) if status == "NEW"]
+    new_jobs = [job for job, status in zip(result.jobs, statuses) if status == "NEW" and job.url not in pruned]
     dupes = len(result.jobs) - len(new_jobs)
     from hunt.screen import max_years, prepare
 

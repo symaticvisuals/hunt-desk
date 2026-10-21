@@ -220,6 +220,17 @@ class TickTests(unittest.TestCase):
         self.tick(now=later + timedelta(hours=5), collected=_collected(_job(1), _job(3)))
         self.assertEqual(len(self.notified), 1)
 
+    def test_a_run_prunes_old_roles_and_a_board_cannot_bring_them_back(self):
+        (self.root / "profile/worth.json").write_text(json.dumps({"max_posted_days": 2}), encoding="utf-8")
+        old = Job("Acme", "Engineer 9", "https://greenhouse.example/9", "greenhouse", "9", "Remote", "Build agents.", "greenhouse", posted_at="2026-09-01")
+        self.tick(collected=_collected(_job(1), old))
+        self.assertEqual([row["url"] for row in load_inbox(self.root)], ["https://greenhouse.example/1"])
+        self.assertIn("https://greenhouse.example/9", json.loads((self.root / "data/pruned.json").read_text()))
+
+        result, _ = self.tick(now=NOON + timedelta(hours=5), collected=_collected(_job(1), old))
+        self.assertEqual(result.added, [])
+        self.assertEqual(len(load_inbox(self.root)), 1)
+
     def test_a_full_run_writes_last_search_and_ignores_quiet_hours(self):
         from hunt.schedule import run
 

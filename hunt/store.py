@@ -1,4 +1,4 @@
-"""Files the desk and the scheduled run share: locks, atomic JSON, the inbox, and dismissals. The inbox only grows."""
+"""Files the desk and the scheduled run share: locks, atomic JSON, the inbox, and dismissals. Old roles leave the inbox through hunt.prune."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from pathlib import Path
 INBOX = "data/inbox.json"
 DISMISSED = "data/dismissed.json"
 LAST_SEARCH = "data/last-search.json"
+PRUNED = "data/pruned.json"
 RUN_LOCK = "data/.hunt.run"
 DATA_LOCK = "data/.hunt.lock"
 ATS = {"greenhouse", "lever", "ashby", "workday"}
@@ -149,8 +150,9 @@ def _stamp(now: datetime) -> str:
     return now.isoformat()
 
 
-def merge(rows: list[dict], fresh: list[dict], now: datetime) -> tuple[list[dict], list[dict]]:
-    """Add fresh roles to the inbox. Returns the inbox and the records that are new to it."""
+def merge(rows: list[dict], fresh: list[dict], now: datetime, pruned: dict[str, str] | None = None) -> tuple[list[dict], list[dict]]:
+    """Add fresh roles to the inbox. Returns the inbox and the records that are new to it. A pruned URL never comes back."""
+    pruned = pruned or {}
     by_url: dict[str, dict] = {}
     by_key: dict[str, dict] = {}
     for record in rows:
@@ -164,7 +166,7 @@ def merge(rows: list[dict], fresh: list[dict], now: datetime) -> tuple[list[dict
     stamp = _stamp(now)
     for job in fresh:
         url = job.get("url") or ""
-        if not url:
+        if not url or url in pruned:
             continue
         record = by_url.get(url)
         if record is None:
@@ -238,9 +240,15 @@ def save_inbox(root: Path, rows: list[dict]) -> None:
 def merge_into_inbox(root: Path, jobs: list[dict], now: datetime) -> list[dict]:
     with data_lock(root):
         seed_inbox(root, now)
-        rows, added = merge(load_inbox(root), jobs, now)
+        rows, added = merge(load_inbox(root), jobs, now, load_pruned(root))
         save_inbox(root, rows)
     return added
+
+
+def load_pruned(root: Path) -> dict[str, str]:
+    """URLs hunt.prune removed from the inbox, with the day it removed each."""
+    payload = read_json(root / PRUNED, {})
+    return payload if isinstance(payload, dict) else {}
 
 
 def update_inbox(root: Path, changes: dict[str, dict]) -> None:
