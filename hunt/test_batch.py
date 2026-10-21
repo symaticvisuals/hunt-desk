@@ -5,7 +5,10 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
 
-from hunt.batch import open_batches, pending_urls, poll, submit_scores
+from contextlib import contextmanager
+
+from hunt.batch import BatchError, BudgetSpent, open_batches, pending_urls, poll, run_now, submit, submit_scores
+from hunt.spend import spent
 from hunt.evaluated import read_csv
 from hunt.tailor import tailored_folder
 
@@ -143,3 +146,91 @@ class BatchTests(unittest.TestCase):
         submit_scores(self.root, [job], client=self.client)
         custom_id = self.batches.created[0][1][0]["custom_id"]
         self.assertTrue(re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", custom_id))
+
+
+def _budget(root: Path, score: float) -> None:
+    budget = {"classify_usd_per_day": 0.5, "score_usd_per_day": score}
+    (root / "profile/preferences.json").write_text(json.dumps({"budget": budget}), encoding="utf-8")
+
+
+def _billed_message(payload: dict, model: str = "claude-opus-5-5"):
+    usage = NS(input_tokens=1000, output_tokens=200, cache_read_input_tokens=0, cache_creation_input_tokens=0)
+    return NS(content=[NS(type="text", text=json.dumps(payload))], stop_reason="end_turn", model=model, usage=usage)
+
+
+def _billed(custom_id: str, payload: dict):
+    return NS(custom_id=custom_id, result=NS(type="succeeded", message=_billed_message(payload)))
+
+
+class RefusingBatches(FakeBatches):
+    def create(self, requests):
+        raise RuntimeError("overloaded")
+
+
+class StreamingClient:
+    def __init__(self, message) -> None:
+        @contextmanager
+        def stream(**kwargs):
+            yield NS(get_final_message=lambda: message)
+
+        self.messages = NS(stream=stream)
+
+
+class SpendBatchTests(unittest.TestCase):
+    def setUp(self):
+        self.root = _root()
+        self.client = FakeClient()
+        self.batches = self.client.messages.batches
+
+    def test_submit_reserves_and_poll_settles_at_billed_usage(self):
+        jobs = [_job(1), _job(2)]
+        batch_id, count = submit(self.root, "score", jobs, client=self.client)
+        self.assertEqual(count, 2)
+        self.assertGreater(spent(self.root, "score"), 0)
+        requests = self.batches.created[0][1]
+        self.batches.finish(batch_id, [_billed(request["custom_id"], _score(job, 60)) for request, job in zip(requests, jobs)])
+        poll(self.root, client=self.client)
+        self.assertAlmostEqual(spent(self.root, "score"), 0.008)
+
+    def test_nothing_fits_raises_and_sends_nothing(self):
+        _budget(self.root, 0.0001)
+        with self.assertRaises(BudgetSpent):
+            submit(self.root, "score", [_job(1)], client=self.client)
+        self.assertEqual(self.batches.created, [])
+        self.assertEqual(spent(self.root, "score"), 0.0)
+
+    def test_enforce_false_sends_every_role(self):
+        _budget(self.root, 0.0001)
+        self.assertEqual(submit(self.root, "score", [_job(1), _job(2)], client=self.client, enforce=False)[1], 2)
+
+    def test_a_refused_create_releases_the_reservation(self):
+        client = NS(messages=NS(batches=RefusingBatches()))
+        with self.assertRaises(BatchError):
+            submit(self.root, "score", [_job(1)], client=client)
+        self.assertEqual(spent(self.root, "score"), 0.0)
+
+    def test_an_expired_batch_settles_at_zero_and_the_roles_stay_unscored(self):
+        batch_id, _ = submit(self.root, "score", [_job(1)], client=self.client)
+        custom_id = self.batches.created[0][1][0]["custom_id"]
+        self.batches.finish(batch_id, [NS(custom_id=custom_id, result=NS(type="expired"))])
+        notes = poll(self.root, client=self.client)
+        self.assertIn("1 failed", notes[0])
+        self.assertEqual(spent(self.root, "score"), 0.0)
+        self.assertEqual(read_csv(self.root / "data/evaluated-jobs.csv"), [])
+        self.assertEqual(pending_urls(self.root), set())
+
+    def test_tailoring_waits_when_scoring_spent_the_cap(self):
+        _budget(self.root, 0.0045)
+        job = _job(1)
+        batch_id, _ = submit(self.root, "score", [job], client=self.client, enforce=False)
+        custom_id = self.batches.created[0][1][0]["custom_id"]
+        self.batches.finish(batch_id, [_billed(custom_id, _score(job, 90))])
+        notes = poll(self.root, client=self.client)
+        self.assertIn("Tailoring waits for tomorrow's budget.", notes[0])
+        self.assertEqual(len(self.batches.created), 1)
+
+    def test_run_now_records_full_price(self):
+        payload = {"resume": "x"}
+        result = run_now(self.root, "tailor", _job(1), client=StreamingClient(_billed_message(payload)))
+        self.assertEqual(result, payload)
+        self.assertAlmostEqual(spent(self.root, "tailor"), 0.008)

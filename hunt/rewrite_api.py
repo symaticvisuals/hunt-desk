@@ -308,6 +308,9 @@ class _Runner:
         self._lock = threading.Lock()
 
     def ask(self, step_name: str, step: dict, system: str, user: str, schema: dict) -> dict:
+        return self.ask_with_stat(step_name, step, system, user, schema)[0]
+
+    def ask_with_stat(self, step_name: str, step: dict, system: str, user: str, schema: dict) -> tuple[dict, CallStat]:
         try:
             with self.client.messages.stream(
                 model=step["model"],
@@ -333,7 +336,7 @@ class _Runner:
         stat = CallStat(step_name, str(getattr(message, "model", None) or step["model"]), *_usage(message))
         with self._lock:
             self.calls.append(stat)
-        return data
+        return data, stat
 
 
 def _rewrite_roles(runner: _Runner, step: dict, resume: str, answers: str, roles: list[dict], report) -> list[dict]:

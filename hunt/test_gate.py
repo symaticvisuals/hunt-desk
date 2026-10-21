@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hunt.gate import (
+    active_classifier,
     HAIKU_SCHEMA,
     GateError,
     ask_clef,
@@ -20,6 +21,7 @@ from hunt.gate import (
     set_classifier,
 )
 from hunt.rewrite_api import load_steps
+from hunt.spend import spent
 from hunt.test_rewrite_api import FakeClient
 from hunt.trim import shorten, years_required, years_stated
 
@@ -112,7 +114,7 @@ class GateTests(unittest.TestCase):
         (root / "data/clef-cache.json").write_text(json.dumps(cache), encoding="utf-8")
         seen = []
 
-        def evaluate_one(_root, job, predictor=None):
+        def evaluate_one(_root, job, predictor=None, by=None):
             seen.append(job["description"])
             return {}
 
@@ -310,3 +312,67 @@ class HaikuTests(unittest.TestCase):
         self.assertEqual(_jev_line(haiku), "Haiku keep · A plausible match")
         self.assertEqual(_jev_line(clef), "Clef-flash 0.40 skip · Same field, wrong role")
         self.assertEqual(_jev_line({}), "Not classified yet")
+
+
+class BilledHaikuClient:
+    """Answers every classify call with a plausible match and a fixed usage."""
+
+    def __init__(self) -> None:
+        self.calls = []
+        usage = type("Usage", (), {"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0})
+        message = type("Message", (), {})()
+        message.content = [type("Block", (), {"type": "text", "text": json.dumps({"worth_reading": True, "fit": 3})})()]
+        message.model = "claude-haiku-5-5"
+        message.stop_reason = "end_turn"
+        message.usage = usage()
+        outer = self
+
+        class Stream:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def get_final_message(self):
+                return message
+
+        class Messages:
+            def stream(self, **kwargs):
+                outer.calls.append(kwargs)
+                return Stream()
+
+        self.messages = Messages()
+
+
+def _with_budget(root: Path, classify: float) -> Path:
+    (root / "profile/preferences.json").write_text(
+        json.dumps({"budget": {"classify_usd_per_day": classify, "score_usd_per_day": 3}}), encoding="utf-8"
+    )
+    return root
+
+
+class HaikuBudgetTests(unittest.TestCase):
+    JOB = {"company": "Acme", "title": "Engineer", "url": "https://example.com/b1", "description": "Build the product."}
+
+    def test_haiku_stops_when_the_classify_cap_is_spent(self):
+        root = _with_budget(_haiku_root(), 0)
+        client = BilledHaikuClient()
+        with self.assertRaisesRegex(GateError, "classify budget is spent"):
+            evaluate(root, self.JOB, predictor=haiku_predictor(root, client=client))
+        self.assertEqual(client.calls, [])
+
+    def test_each_haiku_call_is_billed(self):
+        root = _with_budget(_haiku_root(), 0.5)
+        evaluate(root, self.JOB, predictor=haiku_predictor(root, client=BilledHaikuClient()))
+        self.assertAlmostEqual(spent(root, "classify"), 0.00015)
+
+    def test_clef_falls_back_to_haiku_only_with_a_key_and_no_ollama(self):
+        root = _haiku_root()
+        (root / "profile/models.json").write_text(json.dumps({"classifier": "clef", "steps": {}}), encoding="utf-8")
+        with patch("hunt.gate.clef_reachable", return_value=False):
+            self.assertEqual(active_classifier(root, {"ANTHROPIC_API_KEY": "sk-ant-x"}), "haiku")
+            self.assertEqual(active_classifier(root, {}), "clef")
+            self.assertEqual(active_classifier(root), "clef")
+        with patch("hunt.gate.clef_reachable", return_value=True):
+            self.assertEqual(active_classifier(root, {"ANTHROPIC_API_KEY": "sk-ant-x"}), "clef")

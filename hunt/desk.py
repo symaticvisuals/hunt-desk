@@ -949,7 +949,7 @@ class HuntApp(App):
         pending = [job for job, reason in self.hidden if reason == "not classified yet"]
         try:
             with run_lock(self.root):
-                classified = classify_pending(self.root, pending, on_progress=report)
+                classified = classify_pending(self.root, pending, on_progress=report, env=_env(self.root))
         except Busy:
             self.call_from_thread(self._busy_done, "A scheduled check is classifying these roles.", False)
             return

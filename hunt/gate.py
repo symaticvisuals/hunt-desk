@@ -42,6 +42,9 @@ HAIKU_SCHEMA = {
     "additionalProperties": False,
 }
 
+CLASSIFY_SPENT = "Today's classify budget is spent. New roles wait for tomorrow."
+
+
 class GateError(Exception):
     pass
 
@@ -254,8 +257,24 @@ def haiku_predictor(root: Path, *, client=None):
     except RewriteError as exc:
         raise GateError(f"Haiku cannot run: {exc}") from exc
 
+    from hunt import spend
+
+    table = spend.prices(root)
+
     def predict(state: str, questions: dict) -> dict:
-        reply = runner.ask("classify", step, haiku_system(questions), state, HAIKU_SCHEMA)
+        if spend.room(root, "classify") <= 0:
+            raise GateError(CLASSIFY_SPENT)
+        try:
+            reply, stat = runner.ask_with_stat("classify", step, haiku_system(questions), state, HAIKU_SCHEMA)
+        except RewriteError as exc:
+            raise GateError(str(exc)) from exc
+        usage = {
+            "input_tokens": stat.input_tokens,
+            "output_tokens": stat.output_tokens,
+            "cache_read_input_tokens": stat.cache_read_tokens,
+            "cache_creation_input_tokens": stat.cache_write_tokens,
+        }
+        spend.record(root, "classify", spend.cost(table, stat.model, usage, batch=False))
         answers = {"worth_reading": {"noul": 1.0 if reply.get("worth_reading") is True else 0.0}}
         if isinstance(reply.get("fit"), (int, float)):
             answers["fit"] = {"score": float(reply["fit"])}
@@ -264,8 +283,31 @@ def haiku_predictor(root: Path, *, client=None):
     return predict
 
 
-def make_predictor(root: Path):
+def clef_reachable(timeout: float = 3.0) -> bool:
+    """Ollama answers and the Clef-flash model is pulled. A CLEF_URL that is not Ollama reads as unreachable."""
+    base = os.environ.get("CLEF_URL", DEFAULT_URL).split("/v1/")[0]
+    model = os.environ.get("CLEF_MODEL", DEFAULT_MODEL)
+    try:
+        with urllib.request.urlopen(f"{base}/api/tags", timeout=timeout) as response:
+            tags = json.loads(response.read().decode())
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    names = {str(item.get("name") or "") for item in tags.get("models") or [] if isinstance(item, dict)}
+    return any(name == model or name.split(":")[0] == model for name in names)
+
+
+def active_classifier(root: Path, env: dict[str, str] | None = None) -> str:
+    """The person's choice, except that Clef-flash falls back to Haiku when Ollama is down and a key is present."""
     chosen = classifier(root)
+    if chosen != "clef" or env is None:
+        return chosen
+    if not (env.get("ANTHROPIC_API_KEY") or "").strip().startswith("sk-ant-"):
+        return chosen
+    return chosen if clef_reachable() else "haiku"
+
+
+def make_predictor(root: Path, env: dict[str, str] | None = None):
+    chosen = active_classifier(root, env)
     if chosen == "clef":
         return ask_clef
     if chosen == "haiku":
@@ -273,7 +315,7 @@ def make_predictor(root: Path):
     raise GateError(f"profile/models.json classifier must be clef or haiku, not {chosen}.")
 
 
-def evaluate(root: Path, job: dict, *, predictor=None) -> dict:
+def evaluate(root: Path, job: dict, *, predictor=None, by: str | None = None) -> dict:
     predict = predictor or make_predictor(root)
     try:
         payload = predict(build_state(root, job), questions_for(root))
@@ -283,7 +325,7 @@ def evaluate(root: Path, job: dict, *, predictor=None) -> dict:
         raise GateError(str(exc)) from exc
     rubric = load_json(root / "profile/rubric.json", {})
     record = apply_years_cap(parse_result(payload, job), rubric.get("max_years_without_cap"))
-    record["by"] = classifier(root)
+    record["by"] = by or classifier(root)
     if record["url"]:
         from hunt.store import data_lock
 
@@ -314,11 +356,11 @@ def redo_wrong_years(root: Path, jobs: list[dict]) -> int:
     return removed
 
 
-def classify_pending(root: Path, jobs: list[dict], on_progress=None) -> list[dict]:
-    """Classify every role that is not cached. Clef is local and Haiku costs cents, so the batch is uncapped."""
+def classify_pending(root: Path, jobs: list[dict], on_progress=None, env: dict[str, str] | None = None) -> list[dict]:
+    """Classify every role that is not cached. Haiku stops at the daily classify cap."""
     if not jobs:
         return []
-    return evaluate_many(root, jobs, limit=len(jobs), predictor=None, on_progress=on_progress)
+    return evaluate_many(root, jobs, limit=len(jobs), predictor=None, on_progress=on_progress, env=env)
 
 
 def workers() -> int:
@@ -329,20 +371,21 @@ def workers() -> int:
         return DEFAULT_PARALLEL
 
 
-def evaluate_many(root: Path, jobs: list[dict], *, limit: int, predictor=None, on_progress=None) -> list[dict]:
+def evaluate_many(root: Path, jobs: list[dict], *, limit: int, predictor=None, on_progress=None, env: dict[str, str] | None = None) -> list[dict]:
     from concurrent.futures import ThreadPoolExecutor
 
     cache = load_cache(root)
     pending = [job for job in jobs if not current(cached(cache, job), job)][:limit]
     if not pending:
         return []
-    predict = predictor or make_predictor(root)
-    name = label(root)
+    chosen = active_classifier(root, env) if predictor is None else None
+    predict = predictor or make_predictor(root, env)
+    name = CLASSIFIERS.get(chosen or "", label(root))
 
     def one(job: dict) -> dict:
         if on_progress:
             on_progress(f"{name} · {job.get('company') or 'company'} — {job.get('title') or 'role'}")
-        return evaluate(root, job, predictor=predict)
+        return evaluate(root, job, predictor=predict, by=chosen)
 
     with ThreadPoolExecutor(max_workers=min(workers(), len(pending))) as pool:
         return list(pool.map(one, pending))

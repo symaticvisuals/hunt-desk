@@ -12,6 +12,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from hunt import spend
 from hunt.store import data_lock, read_json, write_json
 
 BATCHES = "data/batches.json"
@@ -34,6 +35,10 @@ TAILOR_INSTRUCTIONS = (
 
 
 class BatchError(Exception):
+    pass
+
+
+class BudgetSpent(BatchError):
     pass
 
 
@@ -118,25 +123,59 @@ def _client(root: Path, client):
         raise BatchError(str(exc)) from exc
 
 
-def _submit(root: Path, kind: str, jobs: list[dict], client) -> str:
+def _unique(jobs: list[dict]) -> list[dict]:
+    return list({job.get("url") or "": job for job in jobs if job.get("url")}.values())
+
+
+def build_requests(root: Path, kind: str, jobs: list[dict]) -> list[dict]:
     from hunt.cli import SCORE_SCHEMA
     from hunt.rewrite_api import load_steps
     from hunt.tailor import TAILOR_SCHEMA
 
-    unique = list({job.get("url") or "": job for job in jobs if job.get("url")}.values())
-    if not unique:
-        raise BatchError("No roles to send.")
     steps = load_steps(root)
     context = _context(root)
     if kind == "score":
-        requests = [_request(kind, job, context, steps["score"], SCORE_INSTRUCTIONS, SCORE_SCHEMA, 2200) for job in unique]
-    else:
-        requests = [_request(kind, job, context, steps["tailor"], TAILOR_INSTRUCTIONS, TAILOR_SCHEMA, 6000) for job in unique]
-    api = _client(root, client)
+        return [_request(kind, job, context, steps["score"], SCORE_INSTRUCTIONS, SCORE_SCHEMA, 2200) for job in jobs]
+    return [_request(kind, job, context, steps["tailor"], TAILOR_INSTRUCTIONS, TAILOR_SCHEMA, 6000) for job in jobs]
+
+
+def _estimate(table: dict, request: dict, *, batch: bool) -> float:
+    params = request["params"]
+    chars = sum(len(block["text"]) for block in params["system"]) + sum(len(message["content"]) for message in params["messages"])
+    return spend.estimate(table, params["model"], chars, params["max_tokens"], batch=batch)
+
+
+def estimates(root: Path, kind: str, jobs: list[dict]) -> list[float]:
+    """Upper-bound batch prices, one per unique role, in the order submit would send them."""
+    table = spend.prices(root)
+    return [_estimate(table, request, batch=True) for request in build_requests(root, kind, _unique(jobs))]
+
+
+def estimate_now(root: Path, kind: str, job: dict) -> float:
+    return _estimate(spend.prices(root), build_requests(root, kind, [job])[0], batch=False)
+
+
+def submit(root: Path, kind: str, jobs: list[dict], *, client=None, enforce: bool = True) -> tuple[str, int]:
+    """Send the roles that fit today's cap, in the order given. Returns the batch id and how many went."""
+    unique = _unique(jobs)
+    if not unique:
+        raise BatchError("No roles to send.")
+    requests = build_requests(root, kind, unique)
+    table = spend.prices(root)
+    token, count = spend.reserve(root, kind, [_estimate(table, request, batch=True) for request in requests], enforce=enforce)
+    if count == 0:
+        raise BudgetSpent(f"Today's {spend.CAP_LABEL[kind]} budget is spent. The rest waits for tomorrow.")
+    requests, unique = requests[:count], unique[:count]
     try:
+        api = _client(root, client)
         batch = api.messages.batches.create(requests=requests)
+    except BatchError:
+        spend.release(root, token)
+        raise
     except Exception as exc:
+        spend.release(root, token)
         raise BatchError(f"The Batch API refused the {kind} batch: {type(exc).__name__}: {getattr(exc, 'message', exc)}") from exc
+    spend.attach(root, token, batch.id)
     record = {
         "id": batch.id,
         "kind": kind,
@@ -149,26 +188,53 @@ def _submit(root: Path, kind: str, jobs: list[dict], client) -> str:
         records = _load(root)
         records.append(record)
         write_json(root / BATCHES, records)
-    return batch.id
+    return batch.id, count
 
 
-def submit_scores(root: Path, jobs: list[dict], *, client=None) -> str:
-    return _submit(root, "score", jobs, client)
+def submit_scores(root: Path, jobs: list[dict], *, client=None, enforce: bool = True) -> str:
+    return submit(root, "score", jobs, client=client, enforce=enforce)[0]
+
+
+def message_payload(message) -> dict | None:
+    if message is None or getattr(message, "stop_reason", None) in {"refusal", "max_tokens"}:
+        return None
+    text = next((block.text for block in getattr(message, "content", None) or [] if getattr(block, "type", None) == "text"), "")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def usage_of(message) -> dict[str, int]:
+    from hunt.rewrite_api import _usage
+
+    fresh, output, cache_read, cache_write = _usage(message)
+    return {"input_tokens": fresh, "output_tokens": output, "cache_read_input_tokens": cache_read, "cache_creation_input_tokens": cache_write}
+
+
+def run_now(root: Path, kind: str, job: dict, *, client=None) -> dict:
+    """One request sent at once at full price, for s and t when the claude CLI is missing. Raises BatchError."""
+    request = build_requests(root, kind, [job])[0]
+    api = _client(root, client)
+    try:
+        with api.messages.stream(**request["params"]) as stream:
+            message = stream.get_final_message()
+    except Exception as exc:
+        raise BatchError(f"Claude could not {kind} this role: {type(exc).__name__}: {getattr(exc, 'message', exc)}") from exc
+    model = str(getattr(message, "model", "") or request["params"]["model"])
+    spend.record(root, kind, spend.cost(spend.prices(root), model, usage_of(message), batch=False))
+    payload = message_payload(message)
+    if payload is None:
+        raise BatchError(f"Claude returned no usable {kind} result for this role.")
+    return payload
 
 
 def _payload(item) -> dict | None:
     result = getattr(item, "result", None)
     if getattr(result, "type", None) != "succeeded":
         return None
-    message = result.message
-    if getattr(message, "stop_reason", None) in {"refusal", "max_tokens"}:
-        return None
-    text = next((block.text for block in message.content if getattr(block, "type", None) == "text"), "")
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, dict) else None
+    return message_payload(result.message)
 
 
 def poll(root: Path, *, client=None) -> list[str]:
@@ -183,11 +249,18 @@ def poll(root: Path, *, client=None) -> list[str]:
         if batch.processing_status != "ended":
             continue
         outputs: dict[str, dict] = {}
+        billed = 0.0
+        table = spend.prices(root)
         for item in api.messages.batches.results(record["id"]):
+            result = getattr(item, "result", None)
+            if getattr(result, "type", None) == "succeeded":
+                message = result.message
+                billed += spend.cost(table, str(getattr(message, "model", "") or ""), usage_of(message), batch=True)
             if item.custom_id in record["jobs"]:
                 payload = _payload(item)
                 if payload is not None:
                     outputs[item.custom_id] = payload
+        spend.settle(root, record["id"], billed)
         # Errored, refused, expired, or missing from the results.
         failed = len(record["jobs"]) - len(outputs)
         note = _apply_scores(root, record, outputs, failed, api) if record["kind"] == "score" else _apply_tailors(root, record, outputs, failed)
@@ -224,8 +297,10 @@ def _apply_scores(root: Path, record: dict, outputs: dict, failed: int, api) -> 
         note += f", {failed} failed"
     if high:
         try:
-            _submit(root, "tailor", high, api)
+            submit(root, "tailor", high, client=api)
             note += ". Tailoring those now in a second batch."
+        except BudgetSpent:
+            note += ". Tailoring waits for tomorrow's budget."
         except BatchError as exc:
             note += f". Tailoring did not start: {exc}"
     return note + ("" if note.endswith(".") else ".")

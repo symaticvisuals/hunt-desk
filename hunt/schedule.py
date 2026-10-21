@@ -220,7 +220,7 @@ def run(
                 result.errors.append(f"{unit}: {error}")
 
         _describe(root, report, fetcher=describer)
-        _classify(root, now, report, classifier, result)
+        _classify(root, now, report, classifier, result, env)
         _check_live(root, now, report, checker)
         result.announced = _mark_visible(root, now)
         if result.announced and notify and not first_run:
@@ -294,17 +294,20 @@ def _describe(root: Path, report, limit: int = 30, fetcher=None) -> int:
     return filled
 
 
-def _classify(root: Path, now: datetime, report, classifier, result: RunResult) -> None:
+def _classify(root: Path, now: datetime, report, classifier, result: RunResult, env: dict[str, str]) -> None:
     pending = [job for job, reason in _jobs_with_reasons(root, now) if reason == "not classified yet"]
     if not pending:
         return
-    from hunt.gate import GateError, classify_pending, label
+    from hunt.gate import CLASSIFIERS, GateError, active_classifier, classifier as chosen_classifier, classify_pending
 
-    name = label(root)
+    active = active_classifier(root, env) if classifier is None else chosen_classifier(root)
+    name = CLASSIFIERS.get(active, active)
+    if active != chosen_classifier(root):
+        name += " (Clef-flash is not running)"
     report(f"{name}: classifying {len(pending)} roles")
     try:
         if classifier is None:
-            classify_pending(root, pending, on_progress=None)
+            classify_pending(root, pending, on_progress=None, env=env)
         else:
             classifier(pending, report)
     except GateError as exc:
