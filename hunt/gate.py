@@ -14,7 +14,7 @@ from pathlib import Path
 
 from hunt.inbox import load_json, read_resume, save_json
 from hunt.search import load_search
-from hunt.trim import shorten, years_required, years_stated
+from hunt.trim import has_text, shorten, years_required, years_stated
 
 CACHE = "data/clef-cache.json"
 MODELS = "profile/models.json"
@@ -35,12 +35,16 @@ CLASSIFIER_LABELS = tuple(CLASSIFIERS.values())
 HAIKU_SCHEMA = {
     "type": "object",
     "properties": {
+        "reason": {"type": "string"},
         "worth_reading": {"type": "boolean"},
         "fit": {"type": "integer", "enum": list(range(len(FIT_LEVELS)))},
     },
-    "required": ["worth_reading", "fit"],
+    "required": ["reason", "worth_reading", "fit"],
     "additionalProperties": False,
 }
+# Haiku reads the whole resume once per batch in its cached system prompt, so the posting gets more room.
+HAIKU_STATE = {"resume_chars": 0, "posting_chars": 4000}
+RESUME_CHARS = 700
 
 CLASSIFY_SPENT = "Today's classify budget is spent. New roles wait for tomorrow."
 
@@ -91,7 +95,7 @@ def current(hit, job: dict) -> bool:
     """A decision made on the title alone is redone once the posting text arrives."""
     if not isinstance(hit, dict):
         return False
-    return hit.get("described", True) or not (job.get("description") or "").strip()
+    return hit.get("described", True) or not has_text(job.get("description") or "")
 
 
 def cached(cache: dict, job: dict):
@@ -113,30 +117,31 @@ def attach(jobs: list[dict], cache: dict) -> None:
         job["jev_over_years"] = hit.get("over_years")
         job["jev_years_sentence"] = hit.get("years_sentence") or ""
         job["jev_by"] = hit.get("by") or "clef"
+        job["jev_reason"] = hit.get("reason") or ""
 
 
-def build_state(root: Path, job: dict) -> str:
+def build_state(root: Path, job: dict, *, resume_chars: int = RESUME_CHARS, posting_chars: int = 1800) -> str:
     search = load_search(root) if (root / "profile/search.json").exists() else {}
     rubric = load_json(root / "profile/rubric.json", {})
     keywords = ", ".join(search.get("keywords") or [])
     years = rubric.get("max_years_without_cap")
     stated = years_stated(job.get("description") or "")
-    return "\n".join(
-        [
-            f"Title: {job.get('title') or ''}",
-            f"Company: {job.get('company') or ''}",
-            f"Location: {job.get('location') or ''}",
-            f"Keywords this person wants: {keywords}",
-            f"Years they can offer before a role is a stretch: {years if years is not None else 'not set'}",
-            f"Years the posting states: {stated if stated is not None else 'none stated'}",
-            "",
-            "Resume excerpt:",
-            shorten(read_resume(root), limit=700) or "(no resume yet)",
-            "",
-            "Posting, with benefits and legal boilerplate removed:",
-            shorten(job.get("description") or "") or "(no description)",
-        ]
-    )
+    lines = [
+        f"Title: {job.get('title') or ''}",
+        f"Company: {job.get('company') or ''}",
+        f"Location: {job.get('location') or ''}",
+        f"Keywords this person wants: {keywords}",
+        f"Years they can offer before a role is a stretch: {years if years is not None else 'not set'}",
+        f"Years the posting states: {stated if stated is not None else 'none stated'}",
+        "",
+    ]
+    if resume_chars:
+        lines += ["Resume excerpt:", shorten(read_resume(root), limit=resume_chars) or "(no resume yet)", ""]
+    lines += [
+        "Posting, with benefits and legal boilerplate removed:",
+        shorten(job.get("description") or "", limit=posting_chars) or "(no description)",
+    ]
+    return "\n".join(lines)
 
 
 def questions_for(root: Path) -> dict:
@@ -186,6 +191,7 @@ def parse_result(payload: dict, job: dict) -> dict:
     years, sentence = years_required(job.get("description") or "")
     return {
         "url": job.get("url") or "",
+        "reason": str(payload.get("reason") or ""),
         "worth": worth,
         "fit": fit,
         "fit_label": label,
@@ -193,7 +199,7 @@ def parse_result(payload: dict, job: dict) -> dict:
         "years_stated": years,
         "years_sentence": sentence,
         "over_years": False,
-        "described": bool((job.get("description") or "").strip()),
+        "described": has_text(job.get("description") or ""),
     }
 
 
@@ -227,20 +233,41 @@ def ask_clef(state: str, questions: dict) -> dict:
         raise GateError("Clef-flash returned a response that was not JSON") from exc
 
 
-def haiku_system(questions: dict) -> str:
-    worth = questions["worth_reading"]
-    fit = questions["fit"]
-    levels = "\n".join(f"{index}: {text}" for index, text in enumerate(fit["criteria"]))
+def haiku_system(root: Path) -> str:
+    """Everything that is the same for every posting, so the API caches it across a batch."""
+    search = load_search(root) if (root / "profile/search.json").exists() else {}
+    rubric = load_json(root / "profile/rubric.json", {})
+    keywords = ", ".join(search.get("keywords") or []) or "the work in the resume"
+    years = rubric.get("max_years_without_cap")
     return "\n".join(
         [
-            "You screen one job posting for one person. The user message has the posting, their keywords, and a resume excerpt.",
+            "You screen one job posting at a time for one person, against their resume and the roles they want.",
             "",
-            f"worth_reading: {worth['instructions']}",
-            f"true when: {worth['criteria']['true']}",
-            f"false when: {worth['criteria']['false']}",
+            f"Roles they want: {keywords}",
+            f"Years they can offer before a role is a stretch: {years if years is not None else 'not set'}",
             "",
-            f"fit: {fit['instructions']} Pick one level.",
-            levels,
+            "Their resume:",
+            read_resume(root).strip() or "(no resume yet)",
+            "",
+            "Answer three fields, in this order.",
+            "",
+            "reason: one sentence, at most 30 words, naming the fact that decides the fit: the role's core work, a must-have the resume has or lacks, or the years asked.",
+            "",
+            "worth_reading: true when the text is a real opening for work close to one of the roles they want. False when it is not a job opening, "
+            "when it is an internship or a training program, or when the work is far from every role they want, such as recruiting or a sales quota "
+            "when none of their roles is in recruiting or sales.",
+            "",
+            "fit: pick one level.",
+            f"0: {FIT_LEVELS[0]}: no role they want does this work, or the text is not a real opening.",
+            f"1: {FIT_LEVELS[1]}: the same field, but the day-to-day work is a different function from every role they want.",
+            f"2: {FIT_LEVELS[2]}: the right function, but most must-have skills or the core stack are missing from the resume, "
+            "or the role needs clearly more seniority than the resume shows, such as years well past what they can offer, or a lead or principal scope.",
+            f"3: {FIT_LEVELS[3]}: the work matches one of their roles, and the resume shows most must-haves or close equivalents. "
+            "A missing nice-to-have or one missing tool does not lower the level. The years asked are at most a little past what they can offer.",
+            f"4: {FIT_LEVELS[4]}: the work and the must-haves are in the resume, and the years asked are within what they can offer.",
+            "",
+            "Judge from the whole resume, projects included. A word like Senior or a level like II is not a mismatch by itself; use the years and scope the posting states. "
+            "When the posting text is missing or only a line, judge the title alone and do not go above 3.",
         ]
     )
 
@@ -270,8 +297,9 @@ def haiku_predictor(root: Path, *, client=None):
         }
         return spend.cost(table, stat.model, usage, batch=False)
 
+    system = haiku_system(root)
+
     def predict(state: str, questions: dict) -> dict:
-        system = haiku_system(questions)
         # Reserved under the lock before the call, so calls in flight together cannot pass the cap.
         estimate = spend.estimate(table, step["model"], len(system) + len(state), step["max_tokens"], batch=False)
         token, count = spend.reserve(root, "classify", [estimate])
@@ -292,8 +320,9 @@ def haiku_predictor(root: Path, *, client=None):
         answers = {"worth_reading": {"noul": 1.0 if reply.get("worth_reading") is True else 0.0}}
         if isinstance(reply.get("fit"), (int, float)):
             answers["fit"] = {"score": float(reply["fit"])}
-        return {"answers": answers}
+        return {"answers": answers, "reason": str(reply.get("reason") or "")}
 
+    predict.state = HAIKU_STATE
     return predict
 
 
@@ -332,7 +361,7 @@ def make_predictor(root: Path, env: dict[str, str] | None = None):
 def evaluate(root: Path, job: dict, *, predictor=None, by: str | None = None) -> dict:
     predict = predictor or make_predictor(root)
     try:
-        payload = predict(build_state(root, job), questions_for(root))
+        payload = predict(build_state(root, job, **getattr(predict, "state", {})), questions_for(root))
     except GateError:
         raise
     except Exception as exc:
@@ -348,6 +377,18 @@ def evaluate(root: Path, job: dict, *, predictor=None, by: str | None = None) ->
             cache[record["url"]] = record
             save_cache(root, cache)
     return record
+
+
+def forget(root: Path, jobs: list[dict]) -> None:
+    """Drop the decisions for these roles, under every board URL, so the classifier judges them again."""
+    from hunt.store import data_lock
+
+    with data_lock(root):
+        cache = load_cache(root)
+        for job in jobs:
+            for url in [job.get("url") or ""] + list(job.get("also_at") or []):
+                cache.pop(url, None)
+        save_cache(root, cache)
 
 
 def redo_wrong_years(root: Path, jobs: list[dict]) -> int:

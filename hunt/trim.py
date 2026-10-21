@@ -30,6 +30,12 @@ _CUE_AFTER = re.compile(
     r"(?:required|needed|minimum|or more)\b)"
 )
 MAX_YEARS = 15
+# Shorter text is a requisition id ("JR2028008") or a stub ("Please refer the post and apply."), not the posting.
+TEXT_AT = 80
+
+
+def has_text(description: str) -> bool:
+    return len((description or "").strip()) >= TEXT_AT
 
 
 def years_required(text: str) -> tuple[int | None, str]:

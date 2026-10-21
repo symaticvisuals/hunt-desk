@@ -305,6 +305,7 @@ def _describe(root: Path, report, limit: int = 30, fetcher=None) -> int:
     from hunt.inbox import load_jobs
     from hunt.screen import context, needs_text
     from hunt.sources import DETAIL_PLATFORMS
+    from hunt.trim import has_text
 
     if fetcher is None:
         from hunt.sources import fetch_description as fetcher
@@ -320,12 +321,19 @@ def _describe(root: Path, report, limit: int = 30, fetcher=None) -> int:
             report(f"error description {job.get('company') or ''}: {type(exc).__name__}: {exc}")
             text = ""
         url = job.get("url") or ""
-        if text.strip():
+        tries = {"description_tries": int(job.get("description_tries") or 0) + 1}
+        if has_text(text):
             changes[url] = {"description": text}
         else:
-            changes[url] = {"description_tries": int(job.get("description_tries") or 0) + 1}
+            changes[url] = {"description": text, **tries} if len(text.strip()) > len((job.get("description") or "").strip()) else tries
     update_inbox(root, changes)
-    filled = sum(1 for change in changes.values() if "description" in change)
+    filled_jobs = [job for job in wanted if has_text(changes[job.get("url") or ""].get("description") or "")]
+    # Whatever the classifier decided before was decided without this text.
+    if filled_jobs:
+        from hunt.gate import forget
+
+        forget(root, filled_jobs)
+    filled = len(filled_jobs)
     report(f"descriptions: {filled} fetched, {len(changes) - filled} still empty")
     return filled
 

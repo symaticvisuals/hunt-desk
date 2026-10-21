@@ -16,7 +16,7 @@ uv run python -m hunt schedule uninstall
 2. Exits when another check is running.
 3. Picks the boards that are due. Exits when none are.
 4. Fetches them and appends new roles to `data/inbox.json`. Nothing is ever removed from the inbox; old roles are hidden as stale instead.
-5. Fetches the posting text, up to 30 a tick, for Greenhouse and Workday roles that came without it and could still reach the list. A role whose text is still empty after two tries is hidden as "no description".
+5. Fetches the posting text, up to 30 a tick, for Greenhouse and Workday roles that came without it, or with only a requisition ID or a stub under 80 characters, and could still reach the list. Text that replaces a stub drops the classifier's earlier decision, so the role is judged again with the posting. A role whose text is still empty after two tries is hidden as "no description".
 6. Classifies new roles with the classifier in `profile/models.json`: Haiku for a fresh clone, or Clef-flash. With Clef-flash selected and Ollama down, a key sends them to Haiku instead. Haiku stops for the day at the sorting cap; the rest wait as `waiting: budget`. If the Claude API fails, the roles wait as "not classified yet" and the next tick retries.
 7. Checks up to 30 shortlisted postings a tick, each at most once a day, and hides closed ones.
 8. Sends roles above the cutoff that have no resume yet to a tailoring batch, then sends unscored roles on the main list to a scoring batch: clean roles first, then roles marked `?`, by classifier fit, then newest. Both stay inside the scoring cap.

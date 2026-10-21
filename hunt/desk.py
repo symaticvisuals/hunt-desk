@@ -836,6 +836,8 @@ class HuntApp(App):
         self.query_one("#detail-kicker", Static).update(_meta(job))
         self.query_one("#detail-title", Static).update(job.get("title") or job.get("role") or "")
         line = _score_line(job, self.hire_at) + "   " + _jev_line(job)
+        if job.get("jev_reason"):
+            line += f"\nWhy: {job['jev_reason']}"
         years = _years_note(job)
         if years:
             line += "\n" + years

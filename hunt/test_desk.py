@@ -823,3 +823,22 @@ class WorthDeskTests(unittest.TestCase):
             self.assertGreaterEqual(detail.size.height, 3)
 
         _pilot(root, script)
+
+    def test_the_detail_shows_why_haiku_decided(self):
+        root = self._root_with("Acme", "Remote - USA")
+        last = json.loads((root / "data/last-search.json").read_text())
+        cache = json.loads((root / "data/clef-cache.json").read_text())
+        url = next(job["url"] for job in last["jobs"] if job["location"] == "Remote - USA")
+        cache[url] = dict(cache.get(url) or {}, keep=True, fit=3, by="haiku", reason="Agents and Python match; asks 4 years.")
+        (root / "data/clef-cache.json").write_text(json.dumps(cache), encoding="utf-8")
+
+        async def script(app, pilot):
+            from textual.widgets import Static
+
+            row = next(index for index, job in enumerate(app.shown) if job["url"] == url)
+            app.query_one("#jobs").move_cursor(row=row)
+            await pilot.pause()
+            text = str(app.query_one("#detail-score", Static).render())
+            self.assertIn("Why: Agents and Python match; asks 4 years.", text)
+
+        _pilot(root, script)

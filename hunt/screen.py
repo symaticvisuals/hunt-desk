@@ -195,7 +195,9 @@ def worth_of(job, ctx: Context):
 
 def needs_text(job, ctx: Context) -> bool:
     """A role whose text the classifier or the worth rules would read, and that has not been fetched twice in vain."""
-    if _text(job, "description").strip():
+    from hunt.trim import has_text
+
+    if has_text(_text(job, "description")):
         return False
     try:
         tries = int(_get(job, "description_tries") or 0)

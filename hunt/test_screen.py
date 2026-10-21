@@ -129,6 +129,7 @@ class HiddenReasonTests(unittest.TestCase):
         self.assertTrue(needs_text(self.job(description="", jev_keep=None, jev_fit=None), self.ctx()))
         self.assertFalse(needs_text(self.job(company="Talentgigs", description="", jev_keep=None, jev_fit=None), self.ctx()))
         self.assertFalse(needs_text(self.job(description="", description_tries=2), self.ctx()))
+        self.assertTrue(needs_text(self.job(description="JR2028008", jev_keep=None, jev_fit=None), self.ctx()))
 
     def test_a_kept_plausible_match_is_visible(self):
         self.assertEqual(self.reason(), "")

@@ -301,14 +301,14 @@ class DescribeTests(unittest.TestCase):
         def fetcher(row):
             asked.append(row["url"])
             if row["url"].endswith("/1"):
-                return "Build agents with customers."
+                return "Build agents with customers, own deployments end to end, and ship Python services on AWS."
             raise SourceError("HTTP 500 from workday")
 
         filled = _describe(root, lambda line: None, fetcher=fetcher)
         self.assertEqual(filled, 1)
         self.assertEqual(sorted(asked), ["https://wd.example/1", "https://wd.example/2"])
         by_url = {row["url"]: row for row in load_inbox(root)}
-        self.assertEqual(by_url["https://wd.example/1"]["description"], "Build agents with customers.")
+        self.assertEqual(by_url["https://wd.example/1"]["description"], "Build agents with customers, own deployments end to end, and ship Python services on AWS.")
         self.assertEqual(by_url["https://wd.example/2"]["description_tries"], 1)
         self.assertNotIn("description_tries", by_url["https://wd.example/3"])
 
@@ -317,6 +317,30 @@ class DescribeTests(unittest.TestCase):
         asked.clear()
         _describe(root, lambda line: None, fetcher=fetcher)
         self.assertEqual(asked, [])
+
+
+class DescribeStubTests(unittest.TestCase):
+    def test_text_that_replaces_a_stub_reopens_the_decision(self):
+        from hunt.schedule import _describe
+
+        root = _root()
+        rows = [
+            {"company": "Acme", "title": f"Engineer {n}", "url": f"https://wd.example/{n}", "platform": "workday", "location": "Remote", "description": "JR20280"}
+            for n in (1, 2)
+        ]
+        save_inbox(root, rows)
+        decisions = {row["url"]: {"url": row["url"], "keep": False, "fit": 1, "described": True} for row in rows}
+        (root / "data/clef-cache.json").write_text(json.dumps(decisions), encoding="utf-8")
+
+        def fetcher(row):
+            return "Build agents with customers, own deployments end to end, and ship Python services on AWS." if row["url"].endswith("/1") else "Apply now."
+
+        self.assertEqual(_describe(root, lambda line: None, fetcher=fetcher), 1)
+        cache = json.loads((root / "data/clef-cache.json").read_text(encoding="utf-8"))
+        self.assertNotIn("https://wd.example/1", cache)
+        self.assertIn("https://wd.example/2", cache)
+        by_url = {row["url"]: row for row in load_inbox(root)}
+        self.assertEqual(by_url["https://wd.example/2"]["description_tries"], 1)
 
 
 class DescribeFailureTests(unittest.TestCase):
@@ -333,13 +357,13 @@ class DescribeFailureTests(unittest.TestCase):
         def fetcher(row):
             if row["url"].endswith("/1"):
                 raise TimeoutError("The read operation timed out")
-            return "Build agents."
+            return "Build agents with customers, own deployments end to end, and ship Python services on AWS."
 
         lines = []
         self.assertEqual(_describe(root, lines.append, fetcher=fetcher), 1)
         by_url = {row["url"]: row for row in load_inbox(root)}
         self.assertEqual(by_url["https://wd.example/1"]["description_tries"], 1)
-        self.assertEqual(by_url["https://wd.example/2"]["description"], "Build agents.")
+        self.assertEqual(by_url["https://wd.example/2"]["description"], "Build agents with customers, own deployments end to end, and ship Python services on AWS.")
         self.assertTrue(any("timed out" in line for line in lines))
 
     def test_detail_fetches_use_a_short_timeout(self):

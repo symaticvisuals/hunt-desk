@@ -10,11 +10,13 @@ from hunt.gate import (
     GateError,
     ask_clef,
     attach,
+    build_state,
     classifier,
     decide,
     evaluate,
     evaluate_many,
     haiku_predictor,
+    load_cache,
     make_predictor,
     parse_result,
     redo_wrong_years,
@@ -101,7 +103,7 @@ class GateTests(unittest.TestCase):
         url = "https://www.linkedin.com/jobs/view/1"
         cache = {url: {"url": url, "keep": False, "fit": 1, "described": False}}
         bare = {"url": url, "title": "Engineer", "description": ""}
-        full = {"url": url, "title": "Engineer", "description": "Build agents with customers."}
+        full = {"url": url, "title": "Engineer", "description": "Build agents with customers, own deployments end to end, and ship Python services on AWS."}
         old = {"url": "https://example.com/2", "keep": True, "fit": 3}
         legacy = {"url": "https://example.com/2", "description": "Ship it."}
         attach([bare, full, legacy], {**cache, legacy["url"]: old})
@@ -120,7 +122,18 @@ class GateTests(unittest.TestCase):
 
         with patch("hunt.gate.evaluate", side_effect=evaluate_one):
             evaluate_many(root, [bare, full], limit=5)
-        self.assertEqual(seen, ["Build agents with customers."])
+        self.assertEqual(seen, ["Build agents with customers, own deployments end to end, and ship Python services on AWS."])
+
+    def test_a_requisition_id_is_not_posting_text(self):
+        url = "https://nvidia.wd5.myworkdayjobs.com/External/job/x/FDE_JR2028008"
+        stub = {"url": url, "title": "Forward Deployed Engineer", "description": "JR2028008"}
+        record = parse_result({"answers": {"worth_reading": {"noul": 1.0}, "fit": {"score": 3.0}}}, stub)
+        self.assertFalse(record["described"])
+        later = dict(stub, description="Build agents with customers, own deployments end to end, and ship Python services on AWS.")
+        attach([later], {url: record})
+        self.assertNotIn("jev_keep", later)
+        attach([stub], {url: record})
+        self.assertTrue(stub["jev_keep"])
 
 
 class FitLevelTests(unittest.TestCase):
@@ -243,9 +256,40 @@ class HaikuTests(unittest.TestCase):
         self.assertEqual(sent["output_config"]["effort"], "low")
         self.assertEqual(sent["output_config"]["format"]["schema"], HAIKU_SCHEMA)
         self.assertIn("Build the product", sent["messages"][0]["content"])
-        self.assertIn("4: A natural hire if the resume is true", sent["system"][0]["text"])
+        self.assertIn("4: A natural hire", sent["system"][0]["text"])
         cached = json.loads((root / "data/clef-cache.json").read_text(encoding="utf-8"))
         self.assertEqual(cached["https://example.com/h1"]["by"], "haiku")
+
+    def test_haiku_reads_the_whole_resume_and_more_of_the_posting(self):
+        root = _haiku_root()
+        resume = "Ships production systems. " * 40 + "Built a LangGraph agent for claims triage."
+        (root / "profile/og-resume.md").write_text(resume, encoding="utf-8")
+        client = FakeClient({"You screen one job posting": json.dumps({"reason": "Agents.", "worth_reading": True, "fit": 3})})
+        job = {
+            "company": "Acme",
+            "title": "Engineer",
+            "url": "https://example.com/h3",
+            "description": "Build the product. " * 150 + "Must have: LangGraph.",
+        }
+        evaluate(root, job, predictor=haiku_predictor(root, client=client))
+        sent = client.messages.kwargs[0]
+        self.assertIn("LangGraph agent for claims triage", sent["system"][0]["text"])
+        self.assertIn("engineer", sent["system"][0]["text"])
+        self.assertNotIn("Resume excerpt", sent["messages"][0]["content"])
+        self.assertIn("Must have: LangGraph.", sent["messages"][0]["content"])
+        self.assertNotIn("Must have: LangGraph.", build_state(root, job))
+
+    def test_haiku_gives_a_reason_first_and_it_reaches_the_desk(self):
+        root = _haiku_root()
+        self.assertEqual(list(HAIKU_SCHEMA["properties"])[0], "reason")
+        self.assertIn("reason", HAIKU_SCHEMA["required"])
+        reason = "Must-have Kubernetes is not in the resume."
+        client = FakeClient({"You screen one job posting": json.dumps({"reason": reason, "worth_reading": True, "fit": 2})})
+        job = {"company": "Acme", "title": "Engineer", "url": "https://example.com/h4", "description": "Run Kubernetes clusters. " * 10}
+        record = evaluate(root, job, predictor=haiku_predictor(root, client=client))
+        self.assertEqual(record["reason"], reason)
+        attach([job], load_cache(root))
+        self.assertEqual(job["jev_reason"], reason)
 
     def test_a_posting_haiku_calls_not_worth_reading_is_skipped(self):
         root = _haiku_root()
