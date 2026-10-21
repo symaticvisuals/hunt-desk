@@ -17,6 +17,10 @@ _EXPAND = {
     "genai": ["generative", "ai"],
     "gen": ["generative"],
     "nlp": ["natural", "language", "processing"],
+    "pm": ["product", "manager"],
+    "apm": ["associate", "product", "manager"],
+    "gpm": ["group", "product", "manager"],
+    "tpm": ["technical", "program", "manager"],
 }
 _SAME = {
     "engineering": "engineer",
@@ -27,6 +31,7 @@ _SAME = {
     "dev": "engineer",
     "programmer": "engineer",
     "llms": "llm",
+    "mgr": "manager",
 }
 # Words a target role often has that titles drop. Ignored when the role still has something specific left.
 _FILLER = {"software", "application", "app"}

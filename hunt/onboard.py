@@ -13,9 +13,11 @@ from pathlib import Path
 from hunt.inbox import load_json, save_json, write_resume
 
 _ROLE = re.compile(
-    r"\b(engineer|developer|designer|scientist|architect|researcher)\b",
+    r"\b(engineer|developer|designer|scientist|architect|researcher|manager|analyst|consultant|lead|director|"
+    r"specialist|strategist|marketer|writer|recruiter|owner)\b",
     re.IGNORECASE,
 )
+_ENGINEERING = re.compile(r"\b(engineer|developer|programmer)\b", re.IGNORECASE)
 _RANGE = re.compile(
     r"\b(19\d{2}|20\d{2})\s*[–—\-]+\s*(19\d{2}|20\d{2}|now|present|current)\b",
     re.IGNORECASE,
@@ -24,6 +26,14 @@ _SENIORITY = re.compile(r"\b(senior|staff|principal|lead|junior|jr|sr)\b", re.IG
 
 # Title phrases the board filter can match. Longer phrases are checked first.
 _PHRASES = (
+    "product manager",
+    "program manager",
+    "project manager",
+    "product owner",
+    "product designer",
+    "product marketing",
+    "data analyst",
+    "business analyst",
     "forward deployed",
     "applied ai",
     "machine learning engineer",
@@ -124,7 +134,7 @@ def infer(text: str, *, today: date | None = None) -> Inferred:
         phrase = " ".join(phrase.split())
         if phrase and phrase not in keywords and 1 < len(phrase.split()) <= 4:
             keywords.append(phrase)
-    if not keywords and _ROLE.search(raw):
+    if not keywords and _ENGINEERING.search(raw):
         keywords.append("software engineer")
     return Inferred(keywords=keywords[:12], years_cap=_years_cap(raw, today or date.today()), roles=roles[:6])
 

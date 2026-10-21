@@ -38,6 +38,19 @@ class OnboardTests(unittest.TestCase):
         self.assertEqual(found.years_cap, 7)
         self.assertTrue(any("Forward Deployed" in role for role in found.roles))
 
+    def test_a_product_resume_gives_product_titles_and_years(self):
+        found = infer(
+            "Jane Doe\nSenior Product Manager | Acme\n2019 – Present\nProduct Manager, Beta Corp\n2016 - 2019\n",
+            today=date(2026, 10, 21),
+        )
+        self.assertIn("product manager", found.keywords)
+        self.assertNotIn("software engineer", found.keywords)
+        self.assertEqual(found.years_cap, 12)
+
+    def test_only_an_engineering_word_brings_the_software_engineer_fallback(self):
+        self.assertEqual(infer("Notes\n" + "Manager " * 20).keywords, [])
+        self.assertEqual(infer("Notes\n" + "Engineer " * 20).keywords, ["software engineer"])
+
     def test_apply_setup_rewrites_keywords_and_keeps_sources(self):
         root = Path(tempfile.mkdtemp())
         (root / "profile").mkdir()

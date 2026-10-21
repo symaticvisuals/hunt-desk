@@ -34,6 +34,14 @@ NO = [
 
 
 class TitleTests(unittest.TestCase):
+    def test_pm_abbreviations_match_their_roles(self):
+        self.assertTrue(role_matches("Senior PM, Growth", "Product Manager"))
+        self.assertTrue(role_matches("APM - Payments", "Associate Product Manager"))
+        self.assertTrue(role_matches("GPM, Platform", "Group Product Manager"))
+        self.assertTrue(role_matches("TPM II", "Technical Program Manager"))
+        self.assertTrue(role_matches("Product Mgr", "Product Manager"))
+        self.assertFalse(role_matches("Backend Engineer", "Product Manager"))
+
     def test_titles_that_should_match(self):
         for role, title in YES:
             self.assertTrue(role_matches(title, role), f"{role!r} should match {title!r}")
