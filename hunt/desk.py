@@ -15,6 +15,7 @@ from textual.coordinate import Coordinate
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Input, Label, RichLog, Select, Static
 
+from hunt.filters import HINT
 from hunt.inbox import (
     add_company,
     anthropic_key_present,
@@ -277,6 +278,8 @@ class HelpScreen(ModalScreen[None]):
                         "u   undo applied (in the Applied view)",
                         "x   not for me (stays hidden, even if it is posted again)",
                         "space   mark or unmark a role; * marks every role in the view; esc clears the marks",
+                        "/   filter the view as you type: words, score>80, score:none, src:workday, why:stretch, days:7, maybe",
+                        "    every token must match, a leading - inverts one, and esc clears the filter",
                         "With roles marked, a, x, u, s, t, and o act on all of them. Three or more ask first.",
                         "s skips marked roles already scored, and t skips roles already tailored.",
                         "A role scored above the cutoff stays on the list however old it gets, until you apply, hide it, or it closes.",
@@ -514,6 +517,9 @@ class HuntApp(App):
     CSS = """
     Screen { background: #1c1b19; color: #e7e5e4; }
     #summary { height: 1; background: #262420; color: #c8c2b8; padding: 0 1; }
+    #filter-bar { height: auto; display: none; background: #262420; padding: 0 1; }
+    #filter-bar.open { display: block; }
+    #filter-status { height: 1; }
     #activity { height: 6; border-bottom: solid #3f3b36; background: #161513; }
     #body { height: 1fr; }
     #jobs { width: 3fr; height: 1fr; }
@@ -552,7 +558,8 @@ class HuntApp(App):
         Binding("x", "dismiss_role", "Not for me"),
         Binding("space", "toggle_mark", "Mark"),
         Binding("asterisk", "mark_all", "Mark all", show=False),
-        Binding("escape", "clear_marks", "Clear marks"),
+        Binding("escape", "clear", "Clear"),
+        Binding("slash", "filter", "Filter"),
         Binding("c", "company_class", "Company", show=False),
         Binding("k", "keep_role", "Keep", show=False),
         Binding("p", "preferences", "Preferences"),
@@ -581,6 +588,7 @@ class HuntApp(App):
         self._tailoring: set[str] = set()
         self._tailor_queue: list[dict] = []
         self._marked: set[str] = set()
+        self._view_filters = {"main": "", "hidden": "", "applied": ""}
         self._after_probe = None
         self._timers_started = False
         self._ctx = None
@@ -594,6 +602,9 @@ class HuntApp(App):
     def compose(self) -> ComposeResult:
         yield Static("", id="summary")
         yield RichLog(id="activity", max_lines=200, markup=False, wrap=True)
+        with Vertical(id="filter-bar"):
+            yield Input(placeholder=HINT, id="filter")
+            yield Static("", id="filter-status", classes="hint")
         with Horizontal(id="body"):
             yield DataTable(id="jobs", cursor_type="row", zebra_stripes=True)
             with Vertical(id="detail"):
@@ -781,6 +792,7 @@ class HuntApp(App):
         else:
             table.add_columns("Company", "Role", "Score", "Posted", "Source")
             rows = [(job, None) for job in self.main]
+        rows = self._filtered(rows)
         self.shown = [job for job, _ in rows]
         self._marked &= {_mark_key(job) for job in self.shown}
         for index, (job, extra) in enumerate(rows):
@@ -816,6 +828,26 @@ class HuntApp(App):
             self._show(self.shown[row])
         else:
             self._show(None)
+
+    def _filtered(self, rows: list[tuple[dict, str | None]]) -> list[tuple[dict, str | None]]:
+        """Narrow the view's rows to its filter, and say how many are left."""
+        from datetime import date
+
+        from hunt.filters import parse, row_for
+
+        query = parse(self._view_filters[self.view], self._ctx.today if self._ctx else date.today())
+        kept = rows
+        if query:
+            kept = [
+                (job, extra)
+                for job, extra in rows
+                if query.matches(row_for(job, extra or "", lambda job=job: self._worth(job).verdict == "maybe"))
+            ]
+        note = f"{len(kept)} of {len(rows)} · enter returns to the list · esc clears"
+        if query.problems:
+            note += " · " + "; ".join(query.problems)
+        self.query_one("#filter-status", Static).update(note)
+        return kept
 
     def _paint_summary(self) -> None:
         from hunt.schedule import load_state, next_check
@@ -854,6 +886,8 @@ class HuntApp(App):
                 "hidden": ("Nothing hidden", ""),
                 "applied": ("No applications yet", "Press a on a role after you apply"),
             }[self.view]
+            if self._view_filters[self.view].strip():
+                empty = ("No roles match the filter", "esc clears it")
             self.query_one("#detail-kicker", Static).update("")
             self.query_one("#detail-title", Static).update(empty[0])
             self.query_one("#detail-score", Static).update(empty[1])
@@ -896,19 +930,61 @@ class HuntApp(App):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action == "undo_applied":
             return self.view == "applied"
-        if action == "clear_marks":
-            return bool(self._marked)
+        if action == "clear":
+            return bool(self._marked) or bool(self._view_filters[self.view]) or getattr(self.focused, "id", None) == "filter"
         return True
 
     def action_toggle_hidden(self) -> None:
         self.view = "main" if self.view == "hidden" else "hidden"
-        self._marked.clear()
-        self._fill()
-        self.refresh_bindings()
+        self._switched()
 
     def action_toggle_applied(self) -> None:
         self.view = "main" if self.view == "applied" else "applied"
+        self._switched()
+
+    def _switched(self) -> None:
+        """Each view keeps its own filter. The bar shows only when the new view has one."""
         self._marked.clear()
+        text = self._view_filters[self.view]
+        box = self.query_one("#filter", Input)
+        with box.prevent(Input.Changed):
+            box.value = text
+        self.query_one("#filter-bar").set_class(bool(text.strip()), "open")
+        if not text.strip():
+            self.query_one("#jobs", DataTable).focus()
+        self._fill()
+        self.refresh_bindings()
+
+    def action_filter(self) -> None:
+        self.query_one("#filter-bar").add_class("open")
+        self.query_one("#filter", Input).focus()
+        self.refresh_bindings()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "filter":
+            return
+        self._view_filters[self.view] = event.value
+        self._fill()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "filter":
+            return
+        if not event.value.strip():
+            self.query_one("#filter-bar").remove_class("open")
+        self.query_one("#jobs", DataTable).focus()
+        self.refresh_bindings()
+
+    def action_clear(self) -> None:
+        """esc clears the marks first, then the filter."""
+        if self._marked:
+            self._marked.clear()
+        else:
+            self._view_filters[self.view] = ""
+            box = self.query_one("#filter", Input)
+            with box.prevent(Input.Changed):
+                box.value = ""
+            self.query_one("#filter-bar").remove_class("open")
+            self.query_one("#jobs", DataTable).focus()
         self._fill()
         self.refresh_bindings()
 
@@ -943,11 +1019,6 @@ class HuntApp(App):
     def action_mark_all(self) -> None:
         keys = {_mark_key(job) for job in self.shown}
         self._marked = set() if keys and keys <= self._marked else keys
-        self._fill()
-        self.refresh_bindings()
-
-    def action_clear_marks(self) -> None:
-        self._marked.clear()
         self._fill()
         self.refresh_bindings()
 

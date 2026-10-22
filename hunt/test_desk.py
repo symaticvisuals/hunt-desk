@@ -681,6 +681,61 @@ class BulkDeskTests(unittest.TestCase):
         _pilot(root, script)
 
 
+class FilterDeskTests(unittest.TestCase):
+    def test_slash_filters_as_you_type_and_star_marks_only_what_is_shown(self):
+        from textual.widgets import DataTable, Input, Static
+
+        root = _root()
+        _three_on_the_list(root)
+
+        async def script(app, pilot):
+            await pilot.press("slash")
+            await pilot.pause()
+            self.assertIsInstance(app.focused, Input)
+            for key in "support":
+                await pilot.press(key)
+            await pilot.pause()
+            self.assertEqual([job["title"] for job in app.shown], ["Support Engineer"])
+            self.assertIn("1 of 3", str(app.query_one("#filter-status", Static).render()))
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertIsInstance(app.focused, DataTable)
+            await pilot.press("asterisk")
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertEqual(app._marked, set())
+            self.assertEqual(len(app.shown), 1)
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertEqual(len(app.shown), 3)
+            self.assertFalse(app.query_one("#filter-bar").has_class("open"))
+
+        _pilot(root, script)
+
+    def test_each_view_keeps_its_own_filter(self):
+        root = _root()
+        _three_on_the_list(root)
+
+        async def script(app, pilot):
+            await pilot.press("h")
+            await pilot.press("slash")
+            for key in "why:not":
+                await pilot.press(key)
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertEqual([job["title"] for job in app.shown], ["Accountant"])
+            await pilot.press("h")
+            await pilot.pause()
+            self.assertEqual(len(app.shown), 3)
+            self.assertFalse(app.query_one("#filter-bar").has_class("open"))
+            await pilot.press("h")
+            await pilot.pause()
+            self.assertEqual([job["title"] for job in app.shown], ["Accountant"])
+            self.assertTrue(app.query_one("#filter-bar").has_class("open"))
+
+        _pilot(root, script)
+
+
 class ClassifyMessageTests(unittest.TestCase):
     def test_the_message_names_the_classifier_that_will_really_run(self):
         from hunt.desk import _classify_message

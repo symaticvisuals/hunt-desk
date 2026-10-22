@@ -64,6 +64,7 @@ After that, change preferences, the master resume, keys, and companies in the de
 | `k` | Keep this role even though a worth rule hid or flagged it |
 | `p` / `r` | Preferences / the master resume, or a new one |
 | `,` | Settings: schedule, check now, quiet hours, classifier, API keys, add company, workflows |
+| `/` | Filter the view as you type: plain words match company, role, place, source, and reason; `score>80`, `score:none`, `src:workday`, `why:stretch`, `days:7`, and `maybe` narrow it; `-` inverts a token. `esc` clears it |
 | `h` / `tab` | Hidden roles and why / applied roles |
 | `?` | All keys |
 
