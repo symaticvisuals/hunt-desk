@@ -181,6 +181,15 @@ class HiddenReasonTests(unittest.TestCase):
         self.assertFalse(needs_text(self.job(posted_at="2026-10-10", description="", jev_keep=None, jev_fit=None), ctx))
         self.assertEqual(self.reason(posted_at="2026-10-08"), "")
 
+    def test_a_role_scored_above_the_cutoff_is_never_hidden_for_age(self):
+        ctx = self.ctx()
+        ctx.worth_rules["max_posted_days"] = 1
+        self.assertEqual(self.reason(ctx, posted_at="2026-10-08", final_score="82"), "")
+        self.assertEqual(self.reason(posted_at="2026-09-20", final_score="82"), "")
+        self.assertEqual(self.reason(ctx, posted_at="2026-10-08", final_score="75"), "posted too long ago")
+        self.assertEqual(self.reason(posted_at="2026-09-20", final_score="82", live="closed"), "closed")
+        self.assertEqual(self.reason(posted_at="2026-09-20", final_score="82", applied="Yes"), "applied")
+
     def test_an_old_posting_the_board_still_lists_is_not_stale(self):
         self.assertEqual(self.reason(posted_at="2026-09-10", last_seen="2026-10-15T09:00:00+05:30"), "")
         self.assertEqual(self.reason(posted_at="2026-09-10", last_seen="2026-10-10T09:00:00+05:30"), "stale")

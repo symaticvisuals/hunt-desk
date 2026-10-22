@@ -42,6 +42,7 @@ class AnswerScreen(ModalScreen[list[str] | None]):
 
     def on_key(self, event) -> None:
         if event.key == "escape":
+            event.stop()
             self.dismiss(None)
 
 
@@ -482,6 +483,7 @@ class ChoiceScreen(ModalScreen[str | None]):
 
     def on_key(self, event) -> None:
         if event.key == "escape":
+            event.stop()
             self.dismiss(None)
 
 
@@ -506,6 +508,7 @@ class ConfirmScreen(ModalScreen[bool]):
 
     def on_key(self, event) -> None:
         if event.key == "escape":
+            event.stop()
             self.dismiss(False)
 
 

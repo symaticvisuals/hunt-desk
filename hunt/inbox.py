@@ -182,63 +182,71 @@ def _same_role(row: dict[str, str], job: dict) -> bool:
     return same_url or same_id
 
 
-def mark_applied(root: Path, job: dict) -> None:
-    rows = read_csv(root / "data/evaluated-jobs.csv")
-    url = job.get("url") or ""
-    job_id = str(job.get("job_id") or "")
-    matched = False
-    for row in rows:
-        if _same_role(row, job):
-            row["applied"] = "Yes"
-            row["status"] = "Applied"
-            matched = True
-    if not matched:
-        rows.append(
-            {
-                "date": "",
-                "company": job.get("company", ""),
-                "role": job.get("title") or job.get("role") or "",
-                "base_score": job.get("base_score", ""),
-                "penalties": job.get("penalties", ""),
-                "final_score": job.get("final_score", ""),
-                "applied": "Yes",
-                "reached_interview": "",
-                "status": "Applied",
-                "platform": job.get("platform", ""),
-                "job_id": job_id,
-                "url": url,
-                "source": job.get("source", ""),
-                "location": job.get("location", ""),
-            }
-        )
-    write_csv(root / "data/evaluated-jobs.csv", [{field: row.get(field, "") for field in FIELDS} for row in rows])
-    _append_tracker(root, job)
+def mark_applied(root: Path, *jobs: dict) -> None:
+    """One write for any number of roles, under the data lock so a score landing at the same moment keeps the apply."""
+    from hunt.store import data_lock
+
+    with data_lock(root):
+        rows = read_csv(root / "data/evaluated-jobs.csv")
+        for job in jobs:
+            matched = False
+            for row in rows:
+                if _same_role(row, job):
+                    row["applied"] = "Yes"
+                    row["status"] = "Applied"
+                    matched = True
+            if not matched:
+                rows.append(
+                    {
+                        "date": "",
+                        "company": job.get("company", ""),
+                        "role": job.get("title") or job.get("role") or "",
+                        "base_score": job.get("base_score", ""),
+                        "penalties": job.get("penalties", ""),
+                        "final_score": job.get("final_score", ""),
+                        "applied": "Yes",
+                        "reached_interview": "",
+                        "status": "Applied",
+                        "platform": job.get("platform", ""),
+                        "job_id": str(job.get("job_id") or ""),
+                        "url": job.get("url") or "",
+                        "source": job.get("source", ""),
+                        "location": job.get("location", ""),
+                    }
+                )
+        write_csv(root / "data/evaluated-jobs.csv", [{field: row.get(field, "") for field in FIELDS} for row in rows])
+        _append_tracker(root, jobs)
 
 
-def unmark_applied(root: Path, job: dict) -> None:
+def unmark_applied(root: Path, *jobs: dict) -> None:
     """Undo mark_applied. A scored row keeps its score. A row that only recorded the apply is dropped,
     so dedupe does not treat the role as scored."""
-    kept: list[dict[str, str]] = []
-    for row in read_csv(root / "data/evaluated-jobs.csv"):
-        if _same_role(row, job):
-            if not (row.get("final_score") or row.get("base_score") or "").strip():
-                continue
-            row["applied"] = ""
-            if row.get("status") == "Applied":
-                row["status"] = ""
-        kept.append(row)
-    write_csv(root / "data/evaluated-jobs.csv", kept)
+    from hunt.store import data_lock
 
-    path = root / TRACKER
+    with data_lock(root):
+        kept: list[dict[str, str]] = []
+        for row in read_csv(root / "data/evaluated-jobs.csv"):
+            if any(_same_role(row, job) for job in jobs):
+                if not (row.get("final_score") or row.get("base_score") or "").strip():
+                    continue
+                row["applied"] = ""
+                if row.get("status") == "Applied":
+                    row["status"] = ""
+            kept.append(row)
+        write_csv(root / "data/evaluated-jobs.csv", kept)
+
+        path = root / TRACKER
+        rows = _read_tracker(path)
+        left = [row for row in rows if not any(_tracked(row, job) for job in jobs)]
+        if len(left) != len(rows):
+            _write_tracker(path, left)
+
+
+def _tracked(row: dict[str, str], job: dict) -> bool:
     url = job.get("url") or ""
-    name = (job.get("company") or "", job.get("role") or job.get("title") or "")
-    rows = _read_tracker(path)
     if url:
-        left = [row for row in rows if row.get("url") != url]
-    else:
-        left = [row for row in rows if (row.get("company") or "", row.get("role") or "") != name]
-    if len(left) != len(rows):
-        _write_tracker(path, left)
+        return row.get("url") == url
+    return (row.get("company") or "", row.get("role") or "") == (job.get("company") or "", job.get("role") or job.get("title") or "")
 
 
 def _read_tracker(path: Path) -> list[dict[str, str]]:
@@ -250,27 +258,27 @@ def _read_tracker(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def _append_tracker(root: Path, job: dict) -> None:
+def _append_tracker(root: Path, jobs: tuple[dict, ...]) -> None:
     path = root / TRACKER
     rows = _read_tracker(path)
-    url = job.get("url") or ""
-    if any(row.get("url") == url and url for row in rows):
-        for row in rows:
-            if row.get("url") == url:
-                row["status"] = "Applied"
-        _write_tracker(path, rows)
-        return
-    rows.append(
-        {
-            "date": "",
-            "company": job.get("company", ""),
-            "role": job.get("title") or job.get("role") or "",
-            "status": "Applied",
-            "reached_interview": "",
-            "url": url,
-            "notes": "",
-        }
-    )
+    for job in jobs:
+        url = job.get("url") or ""
+        if any(row.get("url") == url and url for row in rows):
+            for row in rows:
+                if row.get("url") == url:
+                    row["status"] = "Applied"
+            continue
+        rows.append(
+            {
+                "date": "",
+                "company": job.get("company", ""),
+                "role": job.get("title") or job.get("role") or "",
+                "status": "Applied",
+                "reached_interview": "",
+                "url": url,
+                "notes": "",
+            }
+        )
     _write_tracker(path, rows)
 
 

@@ -142,9 +142,10 @@ def hidden_reason(job, ctx: Context, *, for_claude: bool = False) -> str:
         return "dismissed"
     if str(_get(job, "applied") or "").lower() == "yes":
         return "applied"
-    if _stale(job, ctx.today):
+    pending = to_apply(job, ctx)
+    if not pending and _stale(job, ctx.today):
         return "stale"
-    if _too_old(job, ctx):
+    if not pending and _too_old(job, ctx):
         return "posted too long ago"
     if not title_matches(title, ctx.search):
         return "not a target role"
@@ -211,6 +212,12 @@ def needs_text(job, ctx: Context) -> bool:
 
 def matters(job, ctx: Context) -> bool:
     return not hidden_reason(job, ctx)
+
+
+def to_apply(job, ctx: Context) -> bool:
+    """Scored above screenout_cap, so the person may still apply. Age never hides it, so the prune keeps it too."""
+    score = _score(job)
+    return score is not None and score > ctx.screenout
 
 
 def _score(job) -> float | None:

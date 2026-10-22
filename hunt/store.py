@@ -287,18 +287,22 @@ def load_dismissed(root: Path) -> dict:
     }
 
 
-def dismiss(root: Path, job: dict) -> None:
-    entry = {
-        "url": job.get("url") or "",
-        "key": role_key(job),
-        "company": job.get("company") or "",
-        "title": job.get("title") or job.get("role") or "",
-        "at": datetime.now(timezone.utc).isoformat(),
-    }
+def dismiss(root: Path, *jobs: dict) -> None:
+    at = datetime.now(timezone.utc).isoformat()
+    added = [
+        {
+            "url": job.get("url") or "",
+            "key": role_key(job),
+            "company": job.get("company") or "",
+            "title": job.get("title") or job.get("role") or "",
+            "at": at,
+        }
+        for job in jobs
+    ]
     with data_lock(root):
         entries = read_json(root / DISMISSED, [])
         entries = entries if isinstance(entries, list) else []
-        entries.append(entry)
+        entries.extend(added)
         write_json(root / DISMISSED, entries)
 
 

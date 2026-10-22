@@ -21,7 +21,7 @@ uv run python -m hunt schedule uninstall
 7. Checks up to 30 shortlisted postings a tick, each at most once a day, and hides closed ones.
 8. Sends roles above the cutoff that have no resume yet to a tailoring batch, then sends unscored roles on the main list to a scoring batch: clean roles first, then roles marked `?`, by classifier fit, then newest. Both stay inside the scoring cap.
 9. Records each board's result in `data/schedule.json` and writes a line per board to `data/schedule.log` (last 500 lines).
-10. Removes roles hidden as stale, posted too long ago, or closed from the inbox, and adds their URLs to `data/pruned.json` so a board that still lists one cannot add it again. Dismissed and applied roles stay. Classifier decisions for URLs in neither the inbox nor `data/last-search.json` go too, and so do the posting copies in finished batches; a finished batch keeps its summary and the roles that failed. `hunt cleanup` runs the same prune by hand.
+10. Removes roles hidden as stale, posted too long ago, or closed from the inbox, and adds their URLs to `data/pruned.json` so a board that still lists one cannot add it again. Dismissed and applied roles stay, and so does a role scored above `screenout_cap` until it closes. Classifier decisions for URLs in neither the inbox nor `data/last-search.json` go too, and so do the posting copies in finished batches; a finished batch keeps its summary and the roles that failed. `hunt cleanup` runs the same prune by hand.
 11. Sends a macOS notification when a role reaches the main list for the first time. The very first run after install does not notify.
 
 A tick with no board due still does step 8.

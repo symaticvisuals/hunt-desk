@@ -75,6 +75,18 @@ class PruneTests(unittest.TestCase):
         self.assertEqual(set(load_pruned(root)), {_url(2), _url(3), _url(4), _url(5)})
         self.assertEqual(prune(root, TODAY)["roles"], 0)
 
+    def test_a_role_scored_above_the_cutoff_stays_until_it_closes(self):
+        root = _root([_row(1, posted_at="2026-10-01"), _row(2, posted_at="2026-10-01"), _row(3, posted_at="2026-10-01", live="closed")])
+        with (root / "data/evaluated-jobs.csv").open("a", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=FIELDS)
+            for number, score in ((1, "82"), (2, "75"), (3, "90")):
+                writer.writerow({"company": "Acme", "role": "AI Engineer", "final_score": score, "url": _url(number)})
+
+        prune(root, TODAY)
+
+        self.assertEqual({row["url"] for row in load_inbox(root)}, {_url(1)})
+        self.assertEqual(set(load_pruned(root)), {_url(2), _url(3)})
+
     def test_a_pruned_role_listed_again_is_not_added_back(self):
         root = _root([_row(1), _row(3, posted_at="", first_seen="2026-10-10T10:00:00+00:00", also_at=["https://board.example/3"])])
         prune(root, TODAY)

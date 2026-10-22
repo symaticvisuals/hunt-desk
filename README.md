@@ -9,7 +9,7 @@ The shape comes from [How to Build a Job Hunt System with Claude Code](https://w
 ## How it works
 
 1. **Fetch.** Every 15 minutes a background check pulls new postings from the boards that are due: the Greenhouse, Lever, Ashby, and Workday boards of companies on your watchlist, keyless job feeds, any keyed APIs you add, and JobSpy.
-2. **Screen.** Plain Python hides roles with the wrong title, place, seniority, job type, pay, company size, or posting age. It also hides staffing and training firms and US remote roles you cannot take. `h` shows each hidden role with the reason. Roles hidden for age or because they closed are removed at the end of each check, and a board cannot add them back.
+2. **Screen.** Plain Python hides roles with the wrong title, place, seniority, job type, pay, company size, or posting age. It also hides staffing and training firms and US remote roles you cannot take. `h` shows each hidden role with the reason. Roles hidden for age or because they closed are removed at the end of each check, and a board cannot add them back. A role scored above the cutoff is never hidden for age, so it waits on the list until you apply, hide it, or it closes.
 3. **Sort.** Claude Haiku reads your resume and the posting, names the deciding fact, and says keep or skip. Clef-flash can do this on your machine instead.
 4. **Score.** Claude scores each kept role from 0 to 100 against your resume, using only the rules in `profile/rubric.json`.
 5. **Tailor.** Each role above the cutoff gets a one-page PDF resume, and an ATS check reads the text back out of the PDF.
@@ -59,6 +59,7 @@ After that, change preferences, the master resume, keys, and companies in the de
 | `t` / `v` / `y` | Tailor now / open the PDF / copy the Claude.ai prompt |
 | `a` / `u` | I applied / undo it (in the Applied view) |
 | `x` | Not for me. It stays hidden |
+| `space` / `*` / `esc` | Mark a role / mark every role in the view / clear the marks. With roles marked, `a`, `x`, `u`, `s`, `t`, and `o` act on all of them, and three or more ask first |
 | `c` | The company's class: product, services, staffing, or training. It sticks for every posting from that company |
 | `k` | Keep this role even though a worth rule hid or flagged it |
 | `p` / `r` | Preferences / the master resume, or a new one |

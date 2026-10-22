@@ -133,6 +133,18 @@ class InboxTests(unittest.TestCase):
         rows = read_csv(root / "data/evaluated-jobs.csv")
         self.assertEqual([(row["final_score"], row["applied"], row["status"]) for row in rows], [("82", "", "")])
 
+    def test_mark_applied_and_undo_take_many_roles_in_one_write(self):
+        from hunt.inbox import _read_tracker, unmark_applied
+
+        root = _root()
+        jobs = load_jobs(root)
+        mark_applied(root, *jobs)
+        self.assertEqual([job["applied"] for job in load_jobs(root)], ["Yes", "Yes", "Yes"])
+        self.assertEqual(len(_read_tracker(root / "data/job-tracker.csv")), 3)
+        unmark_applied(root, *jobs[:2])
+        self.assertEqual([row["url"] for row in _read_tracker(root / "data/job-tracker.csv")], [jobs[2]["url"]])
+        self.assertEqual([row["url"] for row in read_csv(root / "data/evaluated-jobs.csv")], [jobs[2]["url"]])
+
     def test_env_blank_does_not_wipe_a_key(self):
         root = _root()
         path = root / ".env"
@@ -543,6 +555,128 @@ class ParallelScoreDeskTests(unittest.TestCase):
                 await app.workers.wait_for_complete()
                 await pilot.pause()
                 self.assertEqual(app._scoring, {})
+
+        _pilot(root, script)
+
+
+def _three_on_the_list(root: Path, scores: dict[str, str] | None = None) -> None:
+    cache = json.loads((root / "data/clef-cache.json").read_text())
+    cache["https://example.com/3"]["fit"] = 4
+    cache["https://example.com/4"] = {"keep": True, "fit": 4}
+    (root / "data/clef-cache.json").write_text(json.dumps(cache))
+    search = json.loads((root / "data/last-search.json").read_text())
+    search["jobs"].append(dict(search["jobs"][0], title="Platform Engineer", url="https://example.com/4", job_id="4"))
+    (root / "data/last-search.json").write_text(json.dumps(search))
+    with (root / "data/evaluated-jobs.csv").open("a", encoding="utf-8") as handle:
+        for number, score in (scores or {}).items():
+            handle.write(f"2026-10-15,Acme,Role {number},{score},,{score},,,,greenhouse,{number},https://example.com/{number},greenhouse,Remote\n")
+
+
+class BulkDeskTests(unittest.TestCase):
+    def test_space_marks_rows_and_two_marked_roles_move_without_asking(self):
+        from textual.widgets import Static
+
+        root = _root()
+        _three_on_the_list(root)
+
+        async def script(app, pilot):
+            self.assertEqual(len(app.shown), 3)
+            await pilot.press("space")
+            await pilot.press("space")
+            await pilot.pause()
+            self.assertEqual(len(app._marked), 2)
+            self.assertIn("2 marked", str(app.query_one("#summary", Static).render()))
+            left = app.shown[2]["url"]
+            await pilot.press("a")
+            await pilot.pause()
+            self.assertEqual([job["url"] for job in app.shown], [left])
+            self.assertEqual(app._marked, set())
+            await pilot.press("tab")
+            await pilot.pause()
+            self.assertEqual(len(app.shown), 2)
+            await pilot.press("asterisk")
+            await pilot.press("u")
+            await pilot.pause()
+            self.assertEqual(app.shown, [])
+            await pilot.press("tab")
+            await pilot.pause()
+            self.assertEqual(len(app.shown), 3)
+
+        _pilot(root, script)
+
+    def test_three_marked_roles_ask_first_and_escape_in_the_question_keeps_the_marks(self):
+        from hunt.steps import ConfirmScreen
+
+        root = _root()
+        _three_on_the_list(root)
+
+        async def script(app, pilot):
+            await pilot.press("asterisk")
+            await pilot.press("x")
+            await pilot.pause()
+            self.assertIsInstance(app.screen, ConfirmScreen)
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertEqual(len(app.shown), 3)
+            self.assertEqual(len(app._marked), 3)
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertEqual(app._marked, set())
+            await pilot.press("asterisk")
+            await pilot.press("x")
+            await pilot.pause()
+            await pilot.click("#yes")
+            await pilot.pause()
+            self.assertEqual(app.shown, [])
+            self.assertEqual(len(json.loads((root / "data/dismissed.json").read_text())), 3)
+
+        _pilot(root, script)
+
+    def test_marked_scoring_skips_roles_already_scored(self):
+        from hunt.cli import Scored
+        from hunt.desk import HuntApp
+
+        root = _root()
+        _three_on_the_list(root, {"1": "82"})
+        started = []
+
+        def fake_score(_root, job, **_kwargs):
+            started.append(job["url"])
+            return Scored(0, f"{job['title']}: 70", 70)
+
+        async def script(app, pilot):
+            with (
+                patch("hunt.cli.score_one", side_effect=fake_score),
+                patch("hunt.live.check_live", return_value="open"),
+                patch.object(HuntApp, "_api_cost_over_cap", return_value=""),
+            ):
+                await pilot.press("asterisk")
+                await pilot.press("s")
+                await _settle(app, pilot)
+            self.assertEqual(sorted(started), ["https://example.com/3", "https://example.com/4"])
+
+        _pilot(root, script)
+
+    def test_marked_tailoring_skips_unscored_and_tailored_roles(self):
+        from hunt.tailor import Tailored, tailored_folder
+
+        root = _root()
+        _three_on_the_list(root, {"1": "82", "3": "80"})
+        folder = tailored_folder(root, {"company": "Acme", "title": "Support Engineer"})
+        folder.mkdir(parents=True)
+        (folder / "resume.json").write_text("{}", encoding="utf-8")
+        started = []
+
+        def fake_tailor(_root, job, **_kwargs):
+            started.append(job["url"])
+            return Tailored(0, "Tailored.")
+
+        async def script(app, pilot):
+            with patch("hunt.tailor.tailor_now", side_effect=fake_tailor), patch("hunt.batch.estimate_now", return_value=0.0):
+                await pilot.press("asterisk")
+                await pilot.press("t")
+                await _settle(app, pilot)
+            self.assertEqual(started, ["https://example.com/1"])
 
         _pilot(root, script)
 

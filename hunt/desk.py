@@ -11,6 +11,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.coordinate import Coordinate
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Input, Label, RichLog, Select, Static
 
@@ -57,6 +58,8 @@ WATCHED = (
     "profile/rubric.json",
 )
 REFRESH_SECONDS = 15
+# Acting on this many marked roles asks first.
+BULK_CONFIRM = 3
 
 
 def _slug(company: str) -> str:
@@ -89,6 +92,7 @@ class AnthropicKeyScreen(ModalScreen[str | None]):
 
     def on_key(self, event) -> None:
         if event.key == "escape":
+            event.stop()
             self.dismiss(None)
 
 
@@ -135,6 +139,7 @@ class WorkspaceScreen(ModalScreen[str | None]):
 
     def on_key(self, event) -> None:
         if event.key == "escape":
+            event.stop()
             self.dismiss(None)
 
 
@@ -158,6 +163,7 @@ class KeysScreen(ModalScreen[dict[str, str] | None]):
 
     def on_key(self, event) -> None:
         if event.key == "escape":
+            event.stop()
             self.dismiss(None)
 
 
@@ -219,6 +225,7 @@ class AddScreen(ModalScreen[dict | None]):
 
     def on_key(self, event) -> None:
         if event.key == "escape":
+            event.stop()
             self.dismiss(None)
 
 
@@ -269,6 +276,10 @@ class HelpScreen(ModalScreen[None]):
                         "a   I applied (moves it to the Applied view)",
                         "u   undo applied (in the Applied view)",
                         "x   not for me (stays hidden, even if it is posted again)",
+                        "space   mark or unmark a role; * marks every role in the view; esc clears the marks",
+                        "With roles marked, a, x, u, s, t, and o act on all of them. Three or more ask first.",
+                        "s skips marked roles already scored, and t skips roles already tailored.",
+                        "A role scored above the cutoff stays on the list however old it gets, until you apply, hide it, or it closes.",
                         "c   set the company's class (product, services, staffing, training) for every posting",
                         "k   keep this role even though a worth rule hid or flagged it",
                         "?   on a row marks a maybe; the detail says why",
@@ -291,6 +302,7 @@ class HelpScreen(ModalScreen[None]):
 
     def on_key(self, event) -> None:
         if event.key == "escape":
+            event.stop()
             self.dismiss(None)
 
 
@@ -538,6 +550,9 @@ class HuntApp(App):
         Binding("a", "applied", "Applied"),
         Binding("u", "undo_applied", "Undo applied"),
         Binding("x", "dismiss_role", "Not for me"),
+        Binding("space", "toggle_mark", "Mark"),
+        Binding("asterisk", "mark_all", "Mark all", show=False),
+        Binding("escape", "clear_marks", "Clear marks"),
         Binding("c", "company_class", "Company", show=False),
         Binding("k", "keep_role", "Keep", show=False),
         Binding("p", "preferences", "Preferences"),
@@ -564,6 +579,8 @@ class HuntApp(App):
         self._key_asked = False
         self._probe_running = False
         self._tailoring: set[str] = set()
+        self._tailor_queue: list[dict] = []
+        self._marked: set[str] = set()
         self._after_probe = None
         self._timers_started = False
         self._ctx = None
@@ -765,12 +782,17 @@ class HuntApp(App):
             table.add_columns("Company", "Role", "Score", "Posted", "Source")
             rows = [(job, None) for job in self.main]
         self.shown = [job for job, _ in rows]
+        self._marked &= {_mark_key(job) for job in self.shown}
         for index, (job, extra) in enumerate(rows):
             if extra is not None:
                 third = Text(extra, style="#8a847c")
             elif (job.get("url") or "") in self._scoring:
                 third = Text("scoring…", style="#e6b84d")
             elif self._queued(job):
+                third = Text("queued", style="#8a847c")
+            elif (job.get("url") or "") in self._tailoring:
+                third = Text("tailoring…", style="#e6b84d")
+            elif self._tailor_waiting(job):
                 third = Text("queued", style="#8a847c")
             elif (job.get("url") or "") in self._in_batch:
                 third = Text("batch", style="#8a847c")
@@ -782,7 +804,7 @@ class HuntApp(App):
             role = _clip(job.get("title") or job.get("role") or "", 42)
             if self.view == "main" and self._worth(job).verdict == "maybe":
                 role = Text.assemble(("? ", "#e6b84d"), role)
-            cells = [_clip(job.get("company") or "", 18), role, third]
+            cells = [self._company_cell(job), role, third]
             if self.view == "main":
                 cells.append(_posted_cell(job))
             table.add_row(*cells, fourth or "", key=str(index))
@@ -800,10 +822,14 @@ class HuntApp(App):
 
         views = {"main": "", "hidden": "Hidden roles · h returns to the main list   ", "applied": "Applied · tab returns to the main list   "}
         parts = [f"{views[self.view]}{len(self.main)} matter", f"{len(self.hidden)} hidden"]
+        if self._marked:
+            parts.append(f"{len(self._marked)} marked")
         if self._scoring:
             parts.append(f"scoring {len(self._scoring)}")
-        if self._queue:
-            parts.append(f"queued {len(self._queue)}")
+        if self._tailoring:
+            parts.append(f"tailoring {len(self._tailoring)}")
+        if self._queue or self._tailor_queue:
+            parts.append(f"queued {len(self._queue) + len(self._tailor_queue)}")
         if self._in_batch:
             parts.append(f"batch {len(self._in_batch)}")
         env = _env(self.root)
@@ -870,17 +896,73 @@ class HuntApp(App):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action == "undo_applied":
             return self.view == "applied"
+        if action == "clear_marks":
+            return bool(self._marked)
         return True
 
     def action_toggle_hidden(self) -> None:
         self.view = "main" if self.view == "hidden" else "hidden"
+        self._marked.clear()
         self._fill()
         self.refresh_bindings()
 
     def action_toggle_applied(self) -> None:
         self.view = "main" if self.view == "applied" else "applied"
+        self._marked.clear()
         self._fill()
         self.refresh_bindings()
+
+    def _company_cell(self, job: dict):
+        name = _clip(job.get("company") or "", 18)
+        return Text.assemble(("● ", "#e6b84d"), name) if _mark_key(job) in self._marked else name
+
+    def _targets(self) -> list[dict]:
+        """The marked roles in list order, or the highlighted one when nothing is marked."""
+        if self._marked:
+            return [job for job in self.shown if _mark_key(job) in self._marked]
+        job = self._selected()
+        return [job] if job is not None else []
+
+    def action_toggle_mark(self) -> None:
+        job = self._selected()
+        if job is None:
+            return
+        key = _mark_key(job)
+        if key in self._marked:
+            self._marked.discard(key)
+        else:
+            self._marked.add(key)
+        table = self.query_one("#jobs", DataTable)
+        row = table.cursor_row
+        table.update_cell_at(Coordinate(row, 0), self._company_cell(job), update_width=True)
+        if row + 1 < len(self.shown):
+            table.move_cursor(row=row + 1)
+        self._paint_summary()
+        self.refresh_bindings()
+
+    def action_mark_all(self) -> None:
+        keys = {_mark_key(job) for job in self.shown}
+        self._marked = set() if keys and keys <= self._marked else keys
+        self._fill()
+        self.refresh_bindings()
+
+    def action_clear_marks(self) -> None:
+        self._marked.clear()
+        self._fill()
+        self.refresh_bindings()
+
+    def _bulk(self, jobs: list[dict], run, question: str, detail: str, yes: str, *, ask: bool | None = None) -> None:
+        """Clear the marks and run. Three or more roles, or ask=True, confirm first."""
+
+        def go() -> None:
+            self._marked.clear()
+            self.refresh_bindings()
+            run(jobs)
+
+        if not (len(jobs) >= BULK_CONFIRM if ask is None else ask):
+            go()
+            return
+        self.push_screen(ConfirmScreen(question, detail, yes, "Cancel"), lambda ok: go() if ok else None)
 
     def action_preferences(self) -> None:
         self.push_screen(PreferencesStep(self.root, can_leave=True), self._preferences_done)
@@ -1046,18 +1128,59 @@ class HuntApp(App):
 
     def _role_result(self, job: dict, result: str | None) -> None:
         if result == "applied":
-            self._mark(job)
+            self._mark([job])
         elif result == "dismiss":
-            self._dismiss(job)
+            self._dismiss([job])
         elif result in {"score", "score_force"}:
             self._score_job(job, force=result == "score_force")
 
     def action_score(self) -> None:
+        if self._marked:
+            self._score_marked(self._targets())
+            return
         job = self._selected()
         if job is None:
             self.notify("Highlight a role first")
             return
         self._score_job(job, force=False)
+
+    def _score_marked(self, jobs: list[dict]) -> None:
+        from hunt.cli import SCORE_WORKERS
+        from hunt.screen import context, max_years, worth_custom_resume
+
+        ctx, cap = context(self.root), max_years(self.root)
+        todo: list[dict] = []
+        skipped: dict[str, int] = {}
+        for job in jobs:
+            url = job.get("url") or ""
+            if str(job.get("final_score") or "").strip():
+                reason = "already scored"
+            elif url in self._scoring or self._queued(job) or url in self._in_batch:
+                reason = "already being scored"
+            else:
+                reason = worth_custom_resume(job, cap, ctx)[1]
+            if reason:
+                skipped[reason] = skipped.get(reason, 0) + 1
+            else:
+                todo.append(job)
+        note = _skipped_note(skipped)
+        if not todo:
+            self.notify(f"None of the {len(jobs)} marked roles can be scored. {note} S on one role scores it anyway.")
+            return
+
+        def run(chosen: list[dict]) -> None:
+            for job in chosen:
+                self._enqueue_or_start(job, False, True)
+            self.notify(f"Scoring {len(chosen)} roles, {SCORE_WORKERS} at a time. {note}".strip())
+
+        over = self._api_cost_over_cap(todo)
+        if over:
+            question = "This goes past today's score and resume budget."
+            detail = over + " Without the claude CLI, scoring and any resume it triggers go through the Claude API at full price."
+            self._bulk(todo, run, question, detail, "Score anyway", ask=True)
+            return
+        detail = f"{SCORE_WORKERS} at a time. A score above the cutoff also tailors a resume. {note}".strip()
+        self._bulk(todo, run, f"Score {len(todo)} roles with Claude?", detail, "Score them")
 
     def _queued(self, job: dict) -> bool:
         return any(waiting.get("url") == job.get("url") for waiting, _force in self._queue)
@@ -1180,7 +1303,7 @@ class HuntApp(App):
                 if not quiet:
                     self.notify(f"{reason}. Open the role and press S to score with Claude anyway.")
                 return
-        over = None if quiet else self._api_cost_over_cap(job)
+        over = None if quiet else self._api_cost_over_cap([job])
         if over:
             self.push_screen(
                 ConfirmScreen(
@@ -1194,7 +1317,7 @@ class HuntApp(App):
             return
         self._enqueue_or_start(job, force, quiet)
 
-    def _api_cost_over_cap(self, job: dict) -> str:
+    def _api_cost_over_cap(self, jobs: list[dict]) -> str:
         """Empty unless s would bill the API (no claude CLI) beyond today's room. Then the line that says by how much."""
         import shutil
 
@@ -1204,7 +1327,7 @@ class HuntApp(App):
 
         if shutil.which("claude") is not None or not api_key_ready(self.root):
             return ""
-        cost = estimate_now(self.root, "score", job) + estimate_now(self.root, "tailor", job)
+        cost = sum(estimate_now(self.root, "score", job) + estimate_now(self.root, "tailor", job) for job in jobs)
         left = spend.room(self.root, "score")
         return f"Up to ${cost:.2f} with ${left:.2f} left today." if cost > left else ""
 
@@ -1248,18 +1371,21 @@ class HuntApp(App):
         self.notify(message, severity="error" if failed else "information")
 
     def action_open(self) -> None:
-        job = self._selected()
-        if job is None:
+        jobs = self._targets()
+        if not jobs:
             return
-        _open_url(job.get("apply_url") or job.get("url") or "")
+        self._bulk(jobs, _open_all, f"Open {len(jobs)} apply links?", "Each opens in a browser tab.", "Open them")
 
     def action_applied(self) -> None:
-        job = self._selected()
-        if job is None or self.view == "applied":
+        jobs = self._targets()
+        if not jobs or self.view == "applied":
             return
-        self._mark(job)
+        self._bulk(jobs, self._mark, f"Mark {len(jobs)} roles applied?", "They move to the Applied view (tab), where u undoes it.", "Mark applied")
 
     def action_tailor_now(self) -> None:
+        if self._marked:
+            self._tailor_marked(self._targets())
+            return
         job = self._selected()
         if job is None:
             self.notify("Highlight a role first")
@@ -1267,7 +1393,7 @@ class HuntApp(App):
         if not str(job.get("final_score") or "").strip():
             self.notify("Score this role first (s). Tailoring starts from its score.")
             return
-        if (job.get("url") or "") in self._tailoring or (job.get("url") or "") in self._in_batch:
+        if (job.get("url") or "") in self._tailoring or self._tailor_waiting(job) or (job.get("url") or "") in self._in_batch:
             self.notify("This role is already being tailored.")
             return
         import shutil
@@ -1291,10 +1417,64 @@ class HuntApp(App):
                 return
         self._start_tailor(job)
 
+    def _tailor_marked(self, jobs: list[dict]) -> None:
+        import shutil
+
+        from hunt import spend
+        from hunt.batch import estimate_now
+        from hunt.cli import SCORE_WORKERS
+        from hunt.tailor import is_tailored
+
+        todo: list[dict] = []
+        skipped: dict[str, int] = {}
+        for job in jobs:
+            url = job.get("url") or ""
+            if not str(job.get("final_score") or "").strip():
+                reason = "not scored"
+            elif url in self._tailoring or self._tailor_waiting(job) or url in self._in_batch:
+                reason = "already being tailored"
+            elif is_tailored(self.root, job):
+                reason = "already tailored"
+            else:
+                reason = ""
+            if reason:
+                skipped[reason] = skipped.get(reason, 0) + 1
+            else:
+                todo.append(job)
+        note = _skipped_note(skipped)
+        if not todo:
+            self.notify(f"None of the {len(jobs)} marked roles need a resume. {note} t on one role tailors it again.")
+            return
+
+        def run(chosen: list[dict]) -> None:
+            for job in chosen:
+                self._start_tailor(job)
+            self.notify(f"Tailoring {len(chosen)} resumes, {SCORE_WORKERS} at a time. {note}".strip())
+
+        if shutil.which("claude") is None:
+            cost = sum(estimate_now(self.root, "tailor", job) for job in todo)
+            left = spend.room(self.root, "tailor")
+            if cost > left:
+                detail = f"Up to ${cost:.2f} at full price with ${left:.2f} left today. {note}".strip()
+                self._bulk(todo, run, "This goes past today's score and resume budget.", detail, "Tailor anyway", ask=True)
+                return
+        detail = f"{SCORE_WORKERS} at a time, each a one-page PDF under resumes/. {note}".strip()
+        self._bulk(todo, run, f"Tailor {len(todo)} resumes?", detail, "Tailor them")
+
+    def _tailor_waiting(self, job: dict) -> bool:
+        return any(waiting.get("url") == job.get("url") for waiting in self._tailor_queue)
+
     def _start_tailor(self, job: dict) -> None:
+        from hunt.cli import SCORE_WORKERS
+
+        if len(self._tailoring) >= SCORE_WORKERS:
+            self._tailor_queue.append(job)
+            self._fill()
+            return
         url = job.get("url") or ""
         self._tailoring.add(url)
         self.activity(f"Tailoring {job.get('company') or 'company'} — {job.get('title') or 'role'}…")
+        self._fill()
 
         def work() -> None:
             from hunt.tailor import tailor_now
@@ -1305,7 +1485,11 @@ class HuntApp(App):
         self.run_worker(work, thread=True, group="score", exclusive=False)
 
     def _tailor_done(self, url: str, message: str, failed: bool) -> None:
+        from hunt.cli import SCORE_WORKERS
+
         self._tailoring.discard(url)
+        while self._tailor_queue and len(self._tailoring) < SCORE_WORKERS:
+            self._start_tailor(self._tailor_queue.pop(0))
         self.reload()
         self.notify(message, severity="error" if failed else "information")
 
@@ -1342,34 +1526,59 @@ class HuntApp(App):
         subprocess.run(["open", str(pdf)], check=False)
 
     def action_undo_applied(self) -> None:
-        job = self._selected()
-        if job is None or self.view != "applied":
+        jobs = self._targets()
+        if not jobs or self.view != "applied":
             return
-        unmark_applied(self.root, job)
-        self.reload()
-        self.notify("No longer marked applied. It is back with the other roles.")
+        detail = "Their tracker rows go. A scored role keeps its score and goes back to the list."
+        self._bulk(jobs, self._unmark, f"Undo applied on {len(jobs)} roles?", detail, "Undo applied")
 
     def action_dismiss_role(self) -> None:
-        job = self._selected()
-        if job is None or self.view == "applied":
+        jobs = self._targets()
+        if not jobs or self.view == "applied":
             return
-        self._dismiss(job)
+        self._bulk(jobs, self._dismiss, f"Hide {len(jobs)} roles for good?", "They stay hidden even if they are posted again.", "Hide them")
 
-    def _mark(self, job: dict) -> None:
-        mark_applied(self.root, job)
-        self.reload()
-        self.notify("Marked applied. It is in the Applied view (tab).")
-
-    def _dismiss(self, job: dict) -> None:
-        from hunt.store import Busy, dismiss
+    def _mark(self, jobs: list[dict]) -> None:
+        from hunt.store import Busy
 
         try:
-            dismiss(self.root, job)
+            mark_applied(self.root, *jobs)
         except Busy as exc:
             self.notify(str(exc), severity="error")
             return
         self.reload()
-        self.notify("Hidden for good, even if it is posted again.")
+        if len(jobs) == 1:
+            self.notify("Marked applied. It is in the Applied view (tab).")
+        else:
+            self.notify(f"Marked {len(jobs)} roles applied. They are in the Applied view (tab).")
+
+    def _unmark(self, jobs: list[dict]) -> None:
+        from hunt.store import Busy
+
+        try:
+            unmark_applied(self.root, *jobs)
+        except Busy as exc:
+            self.notify(str(exc), severity="error")
+            return
+        self.reload()
+        if len(jobs) == 1:
+            self.notify("No longer marked applied. It is back with the other roles.")
+        else:
+            self.notify(f"{len(jobs)} roles are no longer marked applied. They are back with the other roles.")
+
+    def _dismiss(self, jobs: list[dict]) -> None:
+        from hunt.store import Busy, dismiss
+
+        try:
+            dismiss(self.root, *jobs)
+        except Busy as exc:
+            self.notify(str(exc), severity="error")
+            return
+        self.reload()
+        if len(jobs) == 1:
+            self.notify("Hidden for good, even if it is posted again.")
+        else:
+            self.notify(f"Hid {len(jobs)} roles for good, even if they are posted again.")
 
     def _worth(self, job: dict):
         from hunt.screen import worth_of
@@ -1447,6 +1656,16 @@ def _applied_rows(root: Path) -> list[dict]:
         row["apply_url"] = row.get("url") or ""
         row["applied"] = "Yes"
     return list(reversed(rows))
+
+
+def _mark_key(job: dict) -> str:
+    return job.get("url") or f"{job.get('company') or ''}|{job.get('title') or job.get('role') or ''}"
+
+
+def _skipped_note(skipped: dict[str, int]) -> str:
+    if not skipped:
+        return ""
+    return "Skipped " + ", ".join(f"{count} {reason}" for reason, count in skipped.items()) + "."
 
 
 def _clip(value: str, width: int) -> str:
@@ -1554,3 +1773,8 @@ def _posted_cell(job: dict):
 def _open_url(url: str) -> None:
     if url:
         webbrowser.open(url)
+
+
+def _open_all(jobs: list[dict]) -> None:
+    for job in jobs:
+        _open_url(job.get("apply_url") or job.get("url") or "")
