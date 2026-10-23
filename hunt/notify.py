@@ -6,10 +6,13 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import NamedTuple
+from xml.sax.saxutils import escape
 
-from hunt import macapp, system
+from hunt import macapp, system, winclick
 
 UNSUPPORTED = "Notifications run on macOS and Windows only."
+# PowerShell's own app id. Windows 11 shows nothing for an app id that was never registered.
+POWERSHELL_APP_ID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
 
 
 class Posted(NamedTuple):
@@ -48,7 +51,66 @@ def post(root: Path, body: str, *, title: str = "Job hunt", runner=subprocess.ru
     title, body = _one_line(title), _one_line(body)
     if system.is_mac():
         return _post_mac(root, title, body, runner, which)
+    if system.is_windows():
+        return _post_windows(root, title, body, runner, which, registry)
     return Posted(False, UNSUPPORTED)
+
+
+def _xml(text: str) -> str:
+    return escape(text, {'"': "&quot;"})
+
+
+def toast_script(title: str, body: str, link: str) -> str:
+    toast = (
+        f'<toast activationType="protocol" launch="{_xml(link)}:open"><visual><binding template="ToastGeneric">'
+        f"<text>{_xml(title)}</text><text>{_xml(body)}</text></binding></visual></toast>"
+    )
+    quoted = "'" + toast.replace("'", "''") + "'"
+    # The catch prints a plain line, because an uncaught error under -EncodedCommand reaches stderr as CLIXML.
+    return "\n".join(
+        [
+            "$ErrorActionPreference = 'Stop'",
+            "try {",
+            "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null",
+            "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null",
+            "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument",
+            f"$xml.LoadXml({quoted})",
+            "$toast = New-Object Windows.UI.Notifications.ToastNotification $xml",
+            "$toast.Tag = 'hunt'",
+            "$toast.Group = 'hunt'",
+            f"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{POWERSHELL_APP_ID}').Show($toast)",
+            "} catch {",
+            "[Console]::Error.WriteLine($_.Exception.Message)",
+            "exit 1",
+            "}",
+        ]
+    )
+
+
+def _post_windows(root: Path, title: str, body: str, runner, which, registry) -> Posted:
+    try:
+        link = winclick.ensure(root, which=which, registry=registry)
+    except OSError:
+        link = winclick.scheme(root)
+    try:
+        done = runner(
+            system.powershell(toast_script(title, body, link)),
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=15,
+            **system.no_window(),
+        )
+    except subprocess.TimeoutExpired:
+        return Posted(False, "PowerShell did not show the toast within 15 seconds.")
+    except OSError as exc:
+        return Posted(False, str(exc))
+    if done.returncode == 0:
+        return Posted(True)
+    lines = [line.strip() for line in (done.stderr or "").splitlines()]
+    plain = [line for line in lines if line and not line.startswith(("#< CLIXML", "<"))]
+    return Posted(False, plain[-1] if plain else f"PowerShell exited with {done.returncode}")
 
 
 def _post_mac(root: Path, title: str, body: str, runner, which) -> Posted:

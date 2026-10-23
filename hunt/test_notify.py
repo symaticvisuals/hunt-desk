@@ -1,3 +1,4 @@
+import base64
 import subprocess
 import sys
 import tempfile
@@ -7,7 +8,9 @@ from unittest.mock import patch
 
 from hunt.macapp import NOTE
 from hunt.notify import Posted, message, post, send
+from hunt.system import digest
 from hunt.test_macapp import FakeMac
+from hunt.test_winclick import FakeRegistry
 
 
 class MacRunner(FakeMac):
@@ -26,6 +29,25 @@ class MacRunner(FakeMac):
                 raise subprocess.TimeoutExpired(args, 15)
             self.notes.append((self.root / NOTE).read_text(encoding="utf-8"))
         return super().__call__(args, **kwargs)
+
+
+class Recorder:
+    def __init__(self, code: int = 0) -> None:
+        self.calls = []
+        self.kwargs = []
+        self.code = code
+
+    def __call__(self, args, **kwargs):
+        self.calls.append(list(args))
+        self.kwargs.append(kwargs)
+        code = self.code
+
+        class Done:
+            returncode = code
+            stdout = ""
+            stderr = "first line\nShow failed: no desktop" if code else ""
+
+        return Done()
 
 
 class MessageTests(unittest.TestCase):
@@ -85,6 +107,64 @@ class MacBannerTests(unittest.TestCase):
     def test_no_jobs_posts_nothing(self):
         self.assertEqual(send(self.root, [], runner=self.mac, which=lambda n: None), Posted(True))
         self.assertEqual(self.mac.calls, [])
+
+
+class WindowsToastTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / "data").mkdir()
+        patches = [patch("hunt.system.is_mac", return_value=False), patch("hunt.system.is_windows", return_value=True)]
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+
+    def test_the_toast_escapes_text_and_links_to_the_desk(self):
+        runner = Recorder()
+        posted = post(self.root, "AT&T <Acme> O'Reilly \"x\" 🚀", runner=runner, registry=FakeRegistry(), which=lambda n: None)
+        self.assertTrue(posted.ok)
+        self.assertEqual(runner.calls[0][0], "powershell.exe")
+        script = base64.b64decode(runner.calls[0][-1]).decode("utf-16-le")
+        self.assertIn("AT&amp;T &lt;Acme&gt; O''Reilly &quot;x&quot; 🚀", script)
+        self.assertIn(f'launch="hunt-desk-{digest(self.root)}:open"', script)
+        self.assertIn("$ErrorActionPreference = 'Stop'", script)
+        self.assertIn("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe", script)
+        self.assertEqual(runner.kwargs[0]["creationflags"], 0x08000000)
+        self.assertEqual(runner.kwargs[0]["encoding"], "utf-8")
+
+    def test_the_toast_registers_the_click_target(self):
+        registry = FakeRegistry()
+        post(self.root, "x", runner=Recorder(), registry=registry, which=lambda n: None)
+        self.assertTrue((self.root / "data/open-desk.cmd").exists())
+        self.assertTrue(registry.values)
+
+    def test_a_failed_toast_reports_why(self):
+        posted = post(self.root, "x", runner=Recorder(code=1), registry=FakeRegistry(), which=lambda n: None)
+        self.assertEqual(posted, Posted(False, "Show failed: no desktop"))
+
+    def test_a_failure_reason_skips_powershell_clixml(self):
+        runner = Recorder(code=1)
+        runner_call = runner.__call__
+
+        def noisy(args, **kwargs):
+            done = runner_call(args, **kwargs)
+            done.stderr = '#< CLIXML\r\n<Objs Version="1.1.0.1"><Obj S="progress"/></Objs>\r\nElement not found.\r\n<Objs Version="1.1.0.1"></Objs>'
+            return done
+
+        posted = post(self.root, "x", runner=noisy, registry=FakeRegistry(), which=lambda n: None)
+        self.assertEqual(posted, Posted(False, "Element not found."))
+        script = base64.b64decode(runner.calls[0][-1]).decode("utf-16-le")
+        self.assertIn("[Console]::Error.WriteLine($_.Exception.Message)", script)
+
+    def test_a_registry_failure_still_shows_the_toast(self):
+        registry = FakeRegistry()
+
+        def refuse(key, name, value):
+            raise PermissionError(5, "denied")
+
+        registry.set = refuse
+        runner = Recorder()
+        self.assertTrue(post(self.root, "x", runner=runner, registry=registry, which=lambda n: None).ok)
+        self.assertEqual(len(runner.calls), 1)
 
 
 class OtherPlatformTests(unittest.TestCase):
