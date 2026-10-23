@@ -717,7 +717,7 @@ class HuntApp(App):
     def _after_preferences(self) -> None:
         from datetime import datetime
 
-        from hunt.launchd import install, installed
+        from hunt.background import install, installed
         from hunt.probe import merge_saved
 
         added = merge_saved(self.root, datetime.now().astimezone())

@@ -75,9 +75,21 @@ def cmd_search(root: Path) -> int:
     return 0
 
 
+def _attach_output(root: Path) -> None:
+    """Under pythonw there is no console, so print and tracebacks would vanish. Send them where launchd sends its own."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    path = root / "data/schedule.out"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a", encoding="utf-8", buffering=1)
+    sys.stdout = sys.stdout or handle
+    sys.stderr = sys.stderr or handle
+
+
 def cmd_tick(root: Path, args: list[str]) -> int:
     from hunt.schedule import tick
 
+    _attach_output(root)
     result = tick(root, _env(root), force="--force" in args)
     if result.skipped:
         print(f"tick skipped: {result.skipped}")
@@ -120,7 +132,7 @@ def cmd_batch(root: Path) -> int:
 
 
 def cmd_schedule(root: Path, args: list[str]) -> int:
-    from hunt.launchd import install, installed, uninstall
+    from hunt.background import install, installed, uninstall
     from hunt.schedule import status_lines
 
     action = args[0] if args else "status"

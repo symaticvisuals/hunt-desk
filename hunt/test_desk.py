@@ -195,7 +195,7 @@ def _pilot(root: Path, script, *, key: bool = True, probe=None) -> None:
 
     try:
         with (
-            patch("hunt.launchd.installed", return_value=True),
+            patch("hunt.background.installed", return_value=True),
             patch("hunt.schedule.run", side_effect=RuntimeError("no network in tests")),
             patch("hunt.preferences.propose", side_effect=_local_proposal),
             patch("hunt.probe.run_probe", side_effect=probe or (lambda *_args, **_kwargs: Probe(done=True))),
