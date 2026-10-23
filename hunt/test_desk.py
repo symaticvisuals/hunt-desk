@@ -195,7 +195,7 @@ def _pilot(root: Path, script, *, key: bool = True, probe=None) -> None:
 
     try:
         with (
-            patch("hunt.launchd.installed", return_value=True),
+            patch("hunt.background.installed", return_value=True),
             patch("hunt.schedule.run", side_effect=RuntimeError("no network in tests")),
             patch("hunt.preferences.propose", side_effect=_local_proposal),
             patch("hunt.probe.run_probe", side_effect=probe or (lambda *_args, **_kwargs: Probe(done=True))),
@@ -905,6 +905,19 @@ class ProcessAllTests(unittest.TestCase):
                 self.assertEqual(app._queue, [])
 
         _pilot(root, script)
+
+
+class TeardownTests(unittest.TestCase):
+    def test_a_highlight_that_arrives_while_the_desk_closes_is_ignored(self):
+        from types import SimpleNamespace
+
+        async def script(app, pilot):
+            await pilot.pause()
+            self.assertTrue(app.shown)
+            await app.query_one("#detail-kicker").remove()
+            app.on_data_table_row_highlighted(SimpleNamespace(cursor_row=0))
+
+        _pilot(_root(), script)
 
 
 class SettingsClassifierTests(unittest.TestCase):

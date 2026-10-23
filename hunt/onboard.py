@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+from hunt import system
 from hunt.inbox import load_json, save_json, write_resume
 
 _ROLE = re.compile(
@@ -82,6 +83,8 @@ def _pdf_text(path: Path) -> str:
             ["pdftotext", "-q", "-layout", str(path), "-"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             check=False,
         )
@@ -102,10 +105,13 @@ def _pypdf_text(path: Path) -> str:
 
 
 def _textutil(path: Path) -> str:
+    if system.is_windows():
+        raise RuntimeError("Reading .doc, .docx, .rtf, and .html files needs macOS. Save the resume as PDF or Markdown, or paste the text.")
     completed = subprocess.run(
         ["textutil", "-convert", "txt", "-stdout", str(path)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=30,
         check=False,
     )
@@ -206,16 +212,33 @@ def needs_onboarding(root: Path) -> bool:
     return len(text.strip()) < 80
 
 
-def pick_resume_file() -> str | None:
-    """macOS file dialog. Returns a path, or None if the person cancels."""
-    script = 'POSIX path of (choose file with prompt "Choose your resume")'
+WINDOWS_PICKER = """$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = 'Choose your resume'
+$dialog.Filter = 'Resumes|*.pdf;*.docx;*.doc;*.md;*.txt;*.rtf;*.html|All files|*.*'
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.FileName }
+"""
+
+
+def pick_resume_file(*, runner=subprocess.run) -> str | None:
+    """The system file dialog. Returns a path, or None if the person cancels."""
+    if system.is_windows():
+        command = system.powershell(WINDOWS_PICKER, sta=True)
+        extra = {"errors": "replace", **system.no_window()}
+    else:
+        command = ["osascript", "-e", 'POSIX path of (choose file with prompt "Choose your resume")']
+        extra = {}
     try:
-        completed = subprocess.run(
-            ["osascript", "-e", script],
+        completed = runner(
+            command,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=180,
             check=False,
+            **extra,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

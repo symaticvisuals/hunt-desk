@@ -2,7 +2,7 @@
 
 A local job search you can point at any role, from engineering to product management. You upload a resume, pick the titles you want, and the search runs on its own: it fetches postings, sorts them, scores the ones worth a look, and writes a one-page PDF resume for the best of them. Claude spend stays inside two daily caps you set.
 
-It runs on your Mac. Your resume, preferences, and results are files in this folder, and git ignores them.
+It runs on your Mac or Windows PC. Your resume, preferences, and results are files in this folder, and git ignores them.
 
 The shape comes from [How to Build a Job Hunt System with Claude Code](https://www.scottypeterson.net/blog/how-to-build-a-job-hunt-system-with-claude-code).
 
@@ -16,7 +16,7 @@ The shape comes from [How to Build a Job Hunt System with Claude Code](https://w
 
 ## What you need
 
-- **A Mac.** `./start` installs a macOS build of the TeX engine, background checks run through launchd, and notifications use AppleScript.
+- **A Mac, or Windows 10 or 11.** On a Mac, `./start` installs the TeX engine and background checks run through launchd. On Windows, `start.cmd` does the same with Task Scheduler. Windows support is not yet tested by a person, only by CI, so please open an issue for anything that breaks.
 - **An [Anthropic API key](https://platform.claude.com/settings/keys).** It pays for sorting, scoring, and tailoring, within the caps in [What it costs](#what-it-costs).
 
 `./start` installs [uv](https://docs.astral.sh/uv/), which fetches Python 3.11 or newer if you do not have it.
@@ -27,7 +27,6 @@ Optional:
 |---|---|
 | [Claude Code](https://claude.com/claude-code), with `claude` on your PATH | `s` and `t` run through `claude -p`. Without it they use the Messages API with your key. Also the `/job-hunt` skill |
 | [Ollama](https://ollama.com) with `clef-flash` | Sorts postings on your machine for free, instead of Haiku |
-| `terminal-notifier` (`brew install terminal-notifier`) | A notification click opens the desk |
 | Keys for Adzuna, Jooble, Findwork, Reed, or USAJobs | More boards. See [`docs/sources.md`](docs/sources.md) |
 | An Overleaf Git token | Rework a resume that lives on Overleaf |
 
@@ -39,7 +38,15 @@ cd hunt-desk
 ./start
 ```
 
-`./start` installs uv, the Python packages, and Tectonic (the TeX engine that builds the PDFs, about 30 MB, no sudo). It copies the starting files in `profile/defaults/` and `data/defaults/` into place and opens the desk. Run it again any time; it skips what is already done. `./start --no-tex` skips Tectonic, and resumes are then written as `.tex` only.
+On Windows, in PowerShell or Command Prompt:
+
+```bat
+git clone https://github.com/symaticvisuals/hunt-desk.git
+cd hunt-desk
+.\start.cmd
+```
+
+`./start` installs uv, the Python packages, and Tectonic (the TeX engine that builds the PDFs, about 30 MB, no sudo or admin). It copies the starting files in `profile/defaults/` and `data/defaults/` into place and opens the desk. Run it again any time; it skips what is already done. `./start --no-tex` (or `.\start.cmd -NoTex`) skips Tectonic, and resumes are then written as `.tex` only.
 
 The desk walks you through three screens:
 
@@ -124,7 +131,7 @@ Folders from before the PDF output hold `resume.md` and are left as they are.
 
 ## Background checks
 
-Saving preferences turns on a launchd agent that runs `hunt tick` every 15 minutes and once at login. A tick skips quiet hours (23:00 to 07:00 by default) and fetches only the boards that are due. It sorts the new roles, checks that shortlisted postings are still open, and sends a macOS notification when a role newly reaches the list. Then it tailors and scores within the daily caps, and removes roles hidden for age or because they closed. With both caps at 0, a tick never calls Claude. Each board's interval adapts: faster when it finds new roles, slower after empty runs, and backed off when it is blocked.
+Saving preferences turns on a background check that runs `hunt tick` every 15 minutes: a launchd agent on a Mac, which also runs once at login, or a Task Scheduler task on Windows. A tick skips quiet hours (23:00 to 07:00 by default) and fetches only the boards that are due. It sorts the new roles, checks that shortlisted postings are still open, and sends a notification when a role newly reaches the list. Clicking the notification opens the desk. On a Mac the first one asks to allow notifications from Hunt Desk. Then it tailors and scores within the daily caps, and removes roles hidden for age or because they closed. With both caps at 0, a tick never calls Claude. Each board's interval adapts: faster when it finds new roles, slower after empty runs, and backed off when it is blocked.
 
 Turn it off or on in Settings (`,`), or from a terminal:
 
@@ -224,8 +231,9 @@ Every command runs as `uv run python -m hunt <command>`:
 | `classify --limit 15` | Sorts unsorted roles with the selected classifier |
 | `score` | Runs `/job-hunt` through `claude -p` on the last search |
 | `batch` | Lists open batches and applies the finished ones |
-| `tick` | One background check, the same one launchd runs |
+| `tick` | One background check, the same one launchd or Task Scheduler runs |
 | `schedule install`, `status`, `uninstall` | The background checks |
+| `notify-test` | Posts a test banner. Clicking it should open the desk |
 | `resume check`, `prompt`, `build` | See [Resumes](#resumes) |
 | `setup <file or Overleaf URL>` | Reads a resume into the profile and sets the title keywords and years cap. `--rewrite` edits weak lines in a `.tex` |
 | `run api resume-rewrite`, `run managed resume-rewrite` | See [The full rewrite](#the-full-rewrite) |

@@ -551,14 +551,14 @@ class SettingsScreen(ModalScreen[str | None]):
 
     def _refresh(self) -> None:
         from hunt.gate import CLASSIFIERS, label
-        from hunt.launchd import installed
+        from hunt.background import installed
         from hunt.schedule import load_state, status_lines
         from hunt.search import load_search
         from hunt.sources import format_status, source_status
 
         on = installed(self._root)
         self.query_one("#schedule-state", Static).update(
-            "The schedule is on. launchd checks every 15 minutes and runs only the boards that are due."
+            "The schedule is on. It checks every 15 minutes and runs only the boards that are due."
             if on
             else "The schedule is off. Boards are fetched only when you press Check now."
         )
@@ -571,7 +571,7 @@ class SettingsScreen(ModalScreen[str | None]):
             "Haiku classifies new roles through the Claude API, billed to ANTHROPIC_API_KEY, about $0.0003 a role. "
             "Scheduled checks use it too."
             if haiku
-            else "Clef-flash classifies new roles on this Mac through Ollama. Free."
+            else "Clef-flash classifies new roles on this computer through Ollama. Free."
         )
         self.query_one("#classifier", Button).label = "Use Clef-flash" if haiku else "Use Haiku"
         search = load_search(self._root)
@@ -607,7 +607,7 @@ class SettingsScreen(ModalScreen[str | None]):
                 return
             self.notify(f"{CLASSIFIERS[chosen]} now classifies new roles. Roles already classified keep their decision.")
         elif name in {"install", "uninstall"}:
-            from hunt.launchd import install, uninstall
+            from hunt.background import install, uninstall
 
             try:
                 message = install(self._root) if name == "install" else uninstall(self._root)

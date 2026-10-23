@@ -12,12 +12,20 @@ from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 
-from hunt import latex
+from hunt import latex, system
 
 # Tectonic passed the ATS text checks on 2026-10-21; pdflatex is the fallback.
 ENGINES: tuple[str, ...] = ("tectonic", "pdflatex")
 # launchd runs ticks with /usr/bin:/bin, so the engine is also looked for where installers put it.
-SEARCH_DIRS: tuple[str, ...] = ("/opt/homebrew/bin", "/usr/local/bin", "~/.local/bin", "~/Library/TinyTeX/bin/*", "/Library/TeX/texbin")
+SEARCH_DIRS: tuple[str, ...] = (
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "~/.local/bin",
+    "~/Library/TinyTeX/bin/*",
+    "/Library/TeX/texbin",
+    "~/AppData/Roaming/TinyTeX/bin/windows",
+    "~/AppData/Local/Programs/MiKTeX/miktex/bin/x64",
+)
 FLOOR = 2
 
 
@@ -56,9 +64,9 @@ def find_tex(dirs: list[Path] | None = None) -> tuple[str, str] | None:
         if on_path:
             return engine, on_path
         for folder in folders:
-            candidate = folder / engine
-            if candidate.is_file() and os.access(candidate, os.X_OK):
-                return engine, str(candidate)
+            for candidate in (folder / engine, folder / f"{engine}.exe"):
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return engine, str(candidate)
     return None
 
 
@@ -80,7 +88,7 @@ def compile_tex(tex: str, *, engine: tuple[str, str] | None = None) -> Compiled:
         else:
             command = [path, "-interaction=nonstopmode", "-halt-on-error", "resume.tex"]
         try:
-            done = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=120)
+            done = subprocess.run(command, cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, **system.no_window())
             output = (done.stdout or "") + (done.stderr or "")
             code = done.returncode
         except subprocess.TimeoutExpired:

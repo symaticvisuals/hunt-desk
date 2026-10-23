@@ -1,10 +1,12 @@
+import base64
 import json
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
-from hunt.onboard import apply_setup, infer
+from hunt.onboard import _textutil, apply_setup, infer, pick_resume_file
 
 
 RESUME = """
@@ -77,3 +79,59 @@ class OnboardTests(unittest.TestCase):
         self.assertNotIn("accountant", search["keywords"])
         self.assertEqual(rubric["max_years_without_cap"], 7)
         self.assertIn("Forward Deployed Engineer", (root / "profile/og-resume.md").read_text(encoding="utf-8"))
+
+
+class Recorder:
+    def __init__(self, stdout: str = "", code: int = 0) -> None:
+        self.calls = []
+        self.kwargs = []
+        self.stdout = stdout
+        self.code = code
+
+    def __call__(self, args, **kwargs):
+        self.calls.append(list(args))
+        self.kwargs.append(kwargs)
+        out, code = self.stdout, self.code
+
+        class Done:
+            returncode = code
+            stdout = out
+            stderr = ""
+
+        return Done()
+
+
+class WindowsResumeTests(unittest.TestCase):
+    def test_the_windows_picker_returns_the_chosen_path(self):
+        runner = Recorder(stdout="C:\\Users\\José\\resume.pdf\r\n")
+        with patch("hunt.system.is_windows", return_value=True):
+            self.assertEqual(pick_resume_file(runner=runner), "C:\\Users\\José\\resume.pdf")
+        self.assertEqual(runner.calls[0][0], "powershell.exe")
+        self.assertIn("-STA", runner.calls[0])
+        script = base64.b64decode(runner.calls[0][-1]).decode("utf-16-le")
+        self.assertIn("OpenFileDialog", script)
+        self.assertIn("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8", script)
+        self.assertEqual(runner.kwargs[0]["encoding"], "utf-8")
+        self.assertEqual(runner.kwargs[0]["creationflags"], 0x08000000)
+
+    def test_a_localized_windows_picker_cannot_raise(self):
+        runner = Recorder(stdout="")
+        with patch("hunt.system.is_windows", return_value=True):
+            pick_resume_file(runner=runner)
+        self.assertEqual(runner.kwargs[0]["errors"], "replace")
+        self.assertIn("$ProgressPreference = 'SilentlyContinue'", base64.b64decode(runner.calls[0][-1]).decode("utf-16-le"))
+
+    def test_a_cancelled_windows_picker_returns_none(self):
+        with patch("hunt.system.is_windows", return_value=True):
+            self.assertIsNone(pick_resume_file(runner=Recorder(stdout="")))
+            self.assertIsNone(pick_resume_file(runner=Recorder(stdout="C:\\x.pdf", code=1)))
+
+    def test_the_mac_picker_still_uses_applescript(self):
+        runner = Recorder(stdout="/Users/x/resume.pdf\n")
+        with patch("hunt.system.is_windows", return_value=False):
+            self.assertEqual(pick_resume_file(runner=runner), "/Users/x/resume.pdf")
+        self.assertEqual(runner.calls[0][0], "osascript")
+
+    def test_a_docx_on_windows_says_how_to_load_it(self):
+        with patch("hunt.system.is_windows", return_value=True), self.assertRaisesRegex(RuntimeError, "PDF or Markdown"):
+            _textutil(Path("resume.docx"))

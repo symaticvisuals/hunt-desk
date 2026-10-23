@@ -75,15 +75,38 @@ def cmd_search(root: Path) -> int:
     return 0
 
 
+def _attach_output(root: Path) -> None:
+    """Under pythonw there is no console, so print and tracebacks would vanish. Send them where launchd sends its own."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    path = root / "data/schedule.out"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a", encoding="utf-8", buffering=1)
+    sys.stdout = sys.stdout or handle
+    sys.stderr = sys.stderr or handle
+
+
 def cmd_tick(root: Path, args: list[str]) -> int:
     from hunt.schedule import tick
 
+    _attach_output(root)
     result = tick(root, _env(root), force="--force" in args)
     if result.skipped:
         print(f"tick skipped: {result.skipped}")
         return 0
     print(f"tick ran {', '.join(result.units)}: {len(result.added)} new, {len(result.announced)} worth a look")
     return 0
+
+
+def cmd_notify_test(root: Path) -> int:
+    from hunt.notify import post
+
+    posted = post(root, "Test banner. Click it to open the desk.", title="Job hunt")
+    if posted.ok:
+        print("Sent. Click the banner to check that it opens the desk.")
+        return 0
+    print(f"The banner fell back: {posted.reason}")
+    return 1
 
 
 def cmd_batch(root: Path) -> int:
@@ -109,7 +132,7 @@ def cmd_batch(root: Path) -> int:
 
 
 def cmd_schedule(root: Path, args: list[str]) -> int:
-    from hunt.launchd import install, installed, uninstall
+    from hunt.background import install, installed, uninstall
     from hunt.schedule import status_lines
 
     action = args[0] if args else "status"
@@ -209,7 +232,7 @@ def score_one(root: Path, job: dict, *, runner=subprocess.run, client=None) -> S
     packet_job = dict(job)
     packet_job["description"] = shorten(job.get("description") or "", limit=2200)
     (folder / "job.json").write_text(json.dumps(packet_job, indent=2), encoding="utf-8")
-    packet = (folder / "job.json").relative_to(root)
+    packet = (folder / "job.json").relative_to(root).as_posix()
     label = f"{job.get('company') or 'company'} — {job.get('title') or job.get('role') or 'role'}"
     try:
         output, problem = ask(
@@ -739,6 +762,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_tick(root, argv[2:])
     if command == "batch":
         return cmd_batch(root)
+    if command == "notify-test":
+        return cmd_notify_test(root)
     if command == "schedule":
         return cmd_schedule(root, argv[2:])
     if command == "sources":
@@ -773,6 +798,6 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_tex_check(root)
     if command == "resume":
         return cmd_resume(root, argv[2:])
-    print("Commands: search, tick, schedule, batch, sources, last, cleanup, dedupe, classify, setup, overleaf, workflows, run, score, paths, sameness, funnel, seed, tex-check, resume")
+    print("Commands: search, tick, schedule, notify-test, batch, sources, last, cleanup, dedupe, classify, setup, overleaf, workflows, run, score, paths, sameness, funnel, seed, tex-check, resume")
     print("Run with no command to open the desk.")
     return 1

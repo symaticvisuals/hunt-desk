@@ -1,9 +1,12 @@
 import json
+import os
+import sys
 import tempfile
 import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from hunt.store import (
     Busy,
@@ -62,6 +65,26 @@ class StoreTests(unittest.TestCase):
         write_json(path, {"a": 2})
         self.assertEqual(json.loads(path.read_text()), {"a": 2})
         self.assertEqual([p.name for p in (self.root / "data").iterdir()], ["x.json"])
+
+    def test_write_json_retries_a_replace_windows_refuses(self):
+        real = os.replace
+        failures = iter([PermissionError(13, "in use"), PermissionError(13, "in use")])
+
+        def flaky(src, dst):
+            error = next(failures, None)
+            if error:
+                raise error
+            real(src, dst)
+
+        with patch("hunt.store.os.replace", side_effect=flaky):
+            write_json(self.root / "data/x.json", {"a": 1})
+        self.assertEqual(json.loads((self.root / "data/x.json").read_text(encoding="utf-8")), {"a": 1})
+
+    def test_write_json_gives_up_and_leaves_no_temp_file(self):
+        with patch("hunt.store.os.replace", side_effect=PermissionError(13, "in use")), patch("hunt.store.time.sleep"):
+            with self.assertRaises(PermissionError):
+                write_json(self.root / "data/y.json", {"a": 1})
+        self.assertEqual(list((self.root / "data").glob(".y.json.*")), [])
 
     def test_a_second_run_is_refused_while_one_holds_the_lock(self):
         with run_lock(self.root):
@@ -165,6 +188,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual([r["url"] for r in new], ["https://l/new"])
         self.assertEqual(sorted(r["url"] for r in load_inbox(self.root)), ["https://l/new", "https://l/old"])
 
+    @unittest.skipIf(sys.platform == "win32", "Windows has no POSIX file modes")
     def test_write_json_keeps_the_file_mode(self):
         path = self.root / "data/mode.json"
         write_json(path, {"a": 1})

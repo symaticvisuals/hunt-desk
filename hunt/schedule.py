@@ -234,13 +234,18 @@ def run(
         _prune(root, now, report)
         result.announced = _mark_visible(root, now)
         if result.announced and notify and not first_run:
+            from hunt.notify import Posted
+
             send = notifier
             if send is None:
                 from hunt.notify import send
             try:
-                send(root, result.announced)
+                posted = send(root, result.announced)
             except Exception as exc:
                 report(f"notification failed: {exc}")
+            else:
+                if isinstance(posted, Posted) and not posted.ok:
+                    report(f"notification fell back: {posted.reason}")
         report(f"run done: {len(added)} new in inbox, {len(result.announced)} newly worth a look")
     _log(root, lines, now)
     return result
@@ -300,9 +305,11 @@ def _poll_batches(root: Path, now: datetime) -> None:
         _log(root, notes, now)
     for note in notes:
         try:
-            notify.post(root, note)
+            posted = notify.post(root, note)
         except Exception:
-            pass
+            continue
+        if isinstance(posted, notify.Posted) and not posted.ok:
+            _log(root, [f"notification fell back: {posted.reason}"], now)
 
 
 def _jobs_with_reasons(root: Path, now: datetime) -> list[tuple[dict, str]]:

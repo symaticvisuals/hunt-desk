@@ -77,8 +77,13 @@ class Tailored:
     warn: bool = False
 
 
+# Windows cannot create a folder with a device name, so these get a suffix on every platform.
+_RESERVED = {"con", "prn", "aux", "nul", *(f"com{n}" for n in range(1, 10)), *(f"lpt{n}" for n in range(1, 10))}
+
+
 def _slug(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:60] or "role"
+    slug = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:60] or "role"
+    return f"{slug}-1" if slug in _RESERVED else slug
 
 
 def tailored_folder(root: Path, job: dict) -> Path:
@@ -112,7 +117,7 @@ def tailor_one(root: Path, job: dict, *, runner=subprocess.run) -> Tailored:
     try:
         output, problem = ask(
             root,
-            TAILOR_PROMPT.format(packet=(work / "job-full.json").relative_to(root)),
+            TAILOR_PROMPT.format(packet=(work / "job-full.json").relative_to(root).as_posix()),
             TAILOR_SCHEMA,
             log=str((work / "tailor.out").relative_to(root)),
             timeout=900,
@@ -239,7 +244,7 @@ def save_tailored(root: Path, job: dict, output: dict, *, compile=None) -> Tailo
     done = _build(root, folder, resume, job.get("description") or "", compile)
     added = new_numbers(master_text(root), resume_text(done.resume))
     (folder / "notes.md").write_text(_notes(output, added, done.cuts, done.checks, done.problem), encoding="utf-8")
-    where = (folder / ("resume.pdf" if done.built else "resume.tex")).relative_to(root)
+    where = (folder / ("resume.pdf" if done.built else "resume.tex")).relative_to(root).as_posix()
     message = f"Tailored resume: {where}"
     if added:
         message += f". Check these numbers, they are not in your master resume: {', '.join(added)}"
@@ -257,7 +262,7 @@ def rebuild(root: Path, folder: Path, *, compile=None) -> Tailored:
     notes = notes_path.read_text(encoding="utf-8") if notes_path.exists() else "# Notes\n"
     cut = min((notes.find(marker) for marker in _GENERATED if marker in notes), default=len(notes))
     notes_path.write_text(notes[:cut].rstrip() + "\n" + _tail(done.cuts, done.checks, done.problem), encoding="utf-8")
-    where = (folder / ("resume.pdf" if done.built else "resume.tex")).relative_to(root)
+    where = (folder / ("resume.pdf" if done.built else "resume.tex")).relative_to(root).as_posix()
     return Tailored(0 if done.built else 1, f"Rebuilt: {where}", folder, warn=not done.built or done.over or bool(ats.failed(done.checks)))
 
 
@@ -320,9 +325,9 @@ def resume_status(root: Path, job: dict) -> str:
     folder = tailored_folder(root, job)
     for name in ("resume.pdf", "resume.tex"):
         if (folder / name).exists():
-            return str((folder / name).relative_to(root))
+            return (folder / name).relative_to(root).as_posix()
     if (folder / "resume.md").exists():
-        return f"{(folder / 'resume.md').relative_to(root)} (older format)"
+        return f"{(folder / 'resume.md').relative_to(root).as_posix()} (older format)"
     return ""
 
 

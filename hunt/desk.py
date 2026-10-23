@@ -12,6 +12,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Input, Label, RichLog, Select, Static
 
@@ -717,7 +718,7 @@ class HuntApp(App):
     def _after_preferences(self) -> None:
         from datetime import datetime
 
-        from hunt.launchd import install, installed
+        from hunt.background import install, installed
         from hunt.probe import merge_saved
 
         added = merge_saved(self.root, datetime.now().astimezone())
@@ -916,7 +917,11 @@ class HuntApp(App):
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.cursor_row < 0 or event.cursor_row >= len(self.shown):
             return
-        self._show(self.shown[event.cursor_row])
+        try:
+            self._show(self.shown[event.cursor_row])
+        except NoMatches:
+            # A highlight queued while the desk closes arrives after the detail panel is gone.
+            return
 
     def _selected(self) -> dict | None:
         table = self.query_one("#jobs", DataTable)
@@ -1576,7 +1581,7 @@ class HuntApp(App):
 
         text = raw_prompt(self.root, job)
         if shutil.which("pbcopy"):
-            subprocess.run(["pbcopy"], input=text, text=True, check=False)
+            subprocess.run(["pbcopy"], input=text, text=True, encoding="utf-8", check=False)
             self.notify("Prompt copied. Paste it into Claude.ai, then check the .tex with: hunt resume check <file>")
             return
         path = self.root / "data/prompt.md"
@@ -1588,13 +1593,13 @@ class HuntApp(App):
         if job is None:
             self.notify("Highlight a role first")
             return
-        import subprocess
+        from hunt import system
 
         pdf = tailored_folder(self.root, job) / "resume.pdf"
         if not pdf.exists():
             self.notify("No PDF for this role yet.")
             return
-        subprocess.run(["open", str(pdf)], check=False)
+        system.open_path(pdf)
 
     def action_undo_applied(self) -> None:
         jobs = self._targets()

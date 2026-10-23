@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
@@ -12,6 +11,13 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
+from hunt import system
+
+if system.is_windows():
+    import msvcrt
+else:
+    import fcntl
 
 INBOX = "data/inbox.json"
 DISMISSED = "data/dismissed.json"
@@ -54,10 +60,22 @@ def write_json(path: Path, payload) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, indent=2) + "\n")
         os.chmod(tmp, mode)
-        os.replace(tmp, path)
+        _replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+def _replace(tmp: str, path: Path, *, attempts: int = 20, wait: float = 0.05) -> None:
+    """Windows refuses to replace a file another process has open, so a reader mid-read gets a moment to finish."""
+    for attempt in range(attempts):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(wait)
 
 
 def _lock_handle(path: Path):
@@ -65,19 +83,40 @@ def _lock_handle(path: Path):
     return open(path, "a+", encoding="utf-8")
 
 
+def _try_lock(handle) -> bool:
+    if system.is_windows():
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def _unlock(handle) -> None:
+    if system.is_windows():
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 @contextmanager
 def run_lock(root: Path):
     """Held for a whole fetch run. A second caller gets Busy at once."""
     handle = _lock_handle(root / RUN_LOCK)
-    try:
-        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as exc:
+    if not _try_lock(handle):
         handle.close()
-        raise Busy("A check is already running.") from exc
+        raise Busy("A check is already running.")
     try:
         yield
     finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
+        _unlock(handle)
         handle.close()
 
 
@@ -97,21 +136,17 @@ def data_lock(root: Path, timeout: float = 5.0):
         return
     handle = _lock_handle(root / DATA_LOCK)
     deadline = time.monotonic() + timeout
-    while True:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            break
-        except BlockingIOError:
-            if time.monotonic() >= deadline:
-                handle.close()
-                raise Busy("The job files are busy. Try again in a moment.") from None
-            time.sleep(0.05)
+    while not _try_lock(handle):
+        if time.monotonic() >= deadline:
+            handle.close()
+            raise Busy("The job files are busy. Try again in a moment.")
+        time.sleep(0.05)
     held[key] = 1
     try:
         yield
     finally:
         held.pop(key, None)
-        fcntl.flock(handle, fcntl.LOCK_UN)
+        _unlock(handle)
         handle.close()
 
 

@@ -46,6 +46,18 @@ class EngineTests(unittest.TestCase):
         with patch.dict("os.environ", {"PATH": "/usr/bin:/bin"}), patch("hunt.pdf.SEARCH_DIRS", (str(folder),)):
             self.assertEqual(find_tex(), (ENGINES[0], str(fake)))
 
+    def test_a_windows_engine_with_exe_is_found(self):
+        folder = Path(tempfile.mkdtemp())
+        fake = folder / f"{ENGINES[0]}.exe"
+        fake.write_bytes(b"")
+        fake.chmod(0o755)
+        with patch.dict("os.environ", {"PATH": ""}):
+            self.assertEqual(find_tex([folder]), (ENGINES[0], str(fake)))
+
+    def test_the_windows_installers_are_searched(self):
+        for folder in ("~/AppData/Roaming/TinyTeX/bin/windows", "~/AppData/Local/Programs/MiKTeX/miktex/bin/x64"):
+            self.assertIn(folder, SEARCH_DIRS)
+
     def test_no_engine_raises_notex(self):
         with patch("hunt.pdf.find_tex", return_value=None), self.assertRaises(NoTeX):
             compile_tex("x")

@@ -7,7 +7,7 @@ once with `ant apply`. Each run only creates a session.
 from __future__ import annotations
 
 import json
-import os
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -190,7 +190,7 @@ def _download_report(api, session_id: str, sleeper) -> str:
         raw = downloaded.read()
         return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
     if hasattr(downloaded, "write_to_file"):
-        target = Path(os.getenv("TMPDIR", "/tmp")) / f"hunt-{session_id}-{OUTPUT_NAME}"
+        target = Path(tempfile.gettempdir()) / f"hunt-{session_id}-{OUTPUT_NAME}"
         downloaded.write_to_file(str(target))
         return target.read_text(encoding="utf-8")
     if isinstance(downloaded, bytes):
