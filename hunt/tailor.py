@@ -77,8 +77,13 @@ class Tailored:
     warn: bool = False
 
 
+# Windows cannot create a folder with a device name, so these get a suffix on every platform.
+_RESERVED = {"con", "prn", "aux", "nul", *(f"com{n}" for n in range(1, 10)), *(f"lpt{n}" for n in range(1, 10))}
+
+
 def _slug(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:60] or "role"
+    slug = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")[:60] or "role"
+    return f"{slug}-1" if slug in _RESERVED else slug
 
 
 def tailored_folder(root: Path, job: dict) -> Path:

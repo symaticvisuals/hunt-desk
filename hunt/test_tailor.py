@@ -222,3 +222,12 @@ class RawPromptTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertIn("final score 89", raw_prompt(root, JOB))
+
+
+class FolderNameTests(unittest.TestCase):
+    def test_a_reserved_windows_name_gets_a_suffix(self):
+        root = Path(tempfile.mkdtemp())
+        self.assertEqual(tailored_folder(root, {"company": "Aux", "title": "Con"}), root / "resumes/aux-1/con-1")
+        self.assertEqual(tailored_folder(root, {"company": "COM3", "title": "LPT9"}), root / "resumes/com3-1/lpt9-1")
+        self.assertEqual(tailored_folder(root, {"company": "Auxilio", "title": "x"}).parent.name, "auxilio")
+        self.assertEqual(tailored_folder(root, {"company": "Com10", "title": "x"}).parent.name, "com10")

@@ -1588,13 +1588,13 @@ class HuntApp(App):
         if job is None:
             self.notify("Highlight a role first")
             return
-        import subprocess
+        from hunt import system
 
         pdf = tailored_folder(self.root, job) / "resume.pdf"
         if not pdf.exists():
             self.notify("No PDF for this role yet.")
             return
-        subprocess.run(["open", str(pdf)], check=False)
+        system.open_path(pdf)
 
     def action_undo_applied(self) -> None:
         jobs = self._targets()
