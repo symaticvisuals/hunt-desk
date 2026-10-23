@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # One command for a fresh clone: install what is missing, copy the starting files, open the desk.
-# Safe to run again. Each step says what it did. --no-tex skips the TeX engine.
+# Safe to run again. Each step says what it did. --no-tex skips the TeX engine, --no-desk skips opening the desk.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 NO_TEX=0
+NO_DESK=0
 for arg in "$@"; do
   [ "$arg" = "--no-tex" ] && NO_TEX=1
+  [ "$arg" = "--no-desk" ] && NO_DESK=1
 done
 
 step() { printf '\n· %s\n' "$1"; }
@@ -58,6 +60,11 @@ if [ "$NO_TEX" = 0 ]; then
   else
     echo "The TeX check failed. Resumes are kept as .tex until it passes: uv run python -m hunt tex-check"
   fi
+fi
+
+if [ "$NO_DESK" = 1 ]; then
+  step "Done. Open the desk with: uv run python -m hunt"
+  exit 0
 fi
 
 step "Opening the desk"

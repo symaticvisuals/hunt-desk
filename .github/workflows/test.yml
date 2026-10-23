@@ -1,0 +1,63 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - run: uv run python -m unittest discover -s hunt -p "test_*.py" -t .
+  smoke-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~\.local\bin\tectonic.exe
+            ~\AppData\Local\TectonicProject
+          key: tectonic-0.17.0-windows
+      - name: Install
+        run: .\start.cmd -NoDesk
+        shell: cmd
+      - name: Put uv and Tectonic on PATH for later steps
+        shell: pwsh
+        run: Add-Content $env:GITHUB_PATH "$HOME\.local\bin"
+      - name: Schedule on, click target registered
+        shell: pwsh
+        run: |
+          uv run python -m hunt schedule install
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $task = uv run python -c "from pathlib import Path; from hunt.winsched import task_name; print(task_name(Path('.').resolve()))"
+          schtasks /Query /TN $task
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $link = uv run python -c "from pathlib import Path; from hunt.winclick import scheme; print(scheme(Path('.').resolve()))"
+          if (-not (Test-Path "HKCU:\Software\Classes\$link\shell\open\command")) { exit 1 }
+      - name: Toast
+        run: uv run python -m hunt notify-test
+      - name: Schedule off
+        shell: pwsh
+        run: |
+          uv run python -m hunt schedule uninstall
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $task = uv run python -c "from pathlib import Path; from hunt.winsched import task_name; print(task_name(Path('.').resolve()))"
+          schtasks /Query /TN $task 2>$null
+          if ($LASTEXITCODE -eq 0) { exit 1 }
+          $link = uv run python -c "from pathlib import Path; from hunt.winclick import scheme; print(scheme(Path('.').resolve()))"
+          if (Test-Path "HKCU:\Software\Classes\$link") { exit 1 }
+          exit 0
+  smoke-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - run: ./start --no-tex --no-desk
+      - run: uv run python -c "import tempfile; from pathlib import Path; from hunt.macapp import ensure; root = Path(tempfile.mkdtemp()); (root / 'data').mkdir(); print(ensure(root))"
