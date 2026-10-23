@@ -82,6 +82,8 @@ def _pdf_text(path: Path) -> str:
             ["pdftotext", "-q", "-layout", str(path), "-"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             check=False,
         )
@@ -106,6 +108,7 @@ def _textutil(path: Path) -> str:
         ["textutil", "-convert", "txt", "-stdout", str(path)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=30,
         check=False,
     )
@@ -214,6 +217,7 @@ def pick_resume_file() -> str | None:
             ["osascript", "-e", script],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=180,
             check=False,
         )

@@ -41,4 +41,4 @@ def post(root: Path, body: str, *, title: str = "Job hunt", runner=subprocess.ru
             command += ["-execute", f"open -a Terminal {shlex.quote(str(script))}"]
     else:
         command = ["osascript", "-e", f"display notification {_apple(body)} with title {_apple(title)}"]
-    runner(command, check=False, capture_output=True, text=True, timeout=15)
+    runner(command, check=False, capture_output=True, text=True, encoding="utf-8", timeout=15)

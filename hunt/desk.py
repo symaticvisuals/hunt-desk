@@ -1576,7 +1576,7 @@ class HuntApp(App):
 
         text = raw_prompt(self.root, job)
         if shutil.which("pbcopy"):
-            subprocess.run(["pbcopy"], input=text, text=True, check=False)
+            subprocess.run(["pbcopy"], input=text, text=True, encoding="utf-8", check=False)
             self.notify("Prompt copied. Paste it into Claude.ai, then check the .tex with: hunt resume check <file>")
             return
         path = self.root / "data/prompt.md"

@@ -80,7 +80,7 @@ def compile_tex(tex: str, *, engine: tuple[str, str] | None = None) -> Compiled:
         else:
             command = [path, "-interaction=nonstopmode", "-halt-on-error", "resume.tex"]
         try:
-            done = subprocess.run(command, cwd=work, capture_output=True, text=True, timeout=120)
+            done = subprocess.run(command, cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
             output = (done.stdout or "") + (done.stderr or "")
             code = done.returncode
         except subprocess.TimeoutExpired:

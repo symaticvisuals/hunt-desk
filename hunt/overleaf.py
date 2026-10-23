@@ -49,6 +49,7 @@ def fetch_project(root: Path, pid: str) -> Path:
             ["git", "-C", str(dest), "pull", "--ff-only"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=60,
             check=False,
         )
@@ -63,6 +64,7 @@ def fetch_project(root: Path, pid: str) -> Path:
         ["git", "clone", remote, str(dest)],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=120,
         check=False,
     )
@@ -99,13 +101,14 @@ def rewrite_project(tex_path: Path) -> int:
 def push_project(project: Path, message: str) -> None:
     if not (project / ".git").exists():
         raise RuntimeError(f"{project} is not an Overleaf clone.")
-    add = subprocess.run(["git", "-C", str(project), "add", "-A"], capture_output=True, text=True, check=False)
+    add = subprocess.run(["git", "-C", str(project), "add", "-A"], capture_output=True, text=True, encoding="utf-8", check=False)
     if add.returncode != 0:
         raise RuntimeError((add.stderr or "git add failed").strip())
     commit = subprocess.run(
         ["git", "-C", str(project), "commit", "-m", message],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     if commit.returncode != 0 and "nothing to commit" not in (commit.stdout + commit.stderr):
@@ -115,6 +118,7 @@ def push_project(project: Path, message: str) -> None:
         ["git", "-C", str(project), "push", "origin", branch],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     if push.returncode != 0:
@@ -126,6 +130,7 @@ def _branch(project: Path) -> str:
         ["git", "-C", str(project), "rev-parse", "--abbrev-ref", "HEAD"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     name = completed.stdout.strip()
