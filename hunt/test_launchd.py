@@ -1,9 +1,11 @@
 import plistlib
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from hunt.launchd import build_plist, install, label, uninstall
+from hunt.test_macapp import FakeMac
 from hunt.notify import message, send
 
 
@@ -23,6 +25,7 @@ class Recorder:
         return Done()
 
 
+@unittest.skipIf(sys.platform == "win32", "launchd is macOS only")
 class LaunchdTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
@@ -42,14 +45,15 @@ class LaunchdTests(unittest.TestCase):
         self.assertIn("/opt/homebrew/bin", plist["EnvironmentVariables"]["PATH"])
 
     def test_install_writes_the_agent_and_the_desk_script(self):
-        runner = Recorder()
+        runner = FakeMac()
         note = install(self.root, runner=runner, which=lambda name: "/opt/homebrew/bin/uv", home=self.home, uid=501)
         path = self.home / "Library/LaunchAgents" / f"{label(self.root)}.plist"
         self.assertEqual(plistlib.loads(path.read_bytes())["StartInterval"], 900)
-        self.assertEqual(runner.calls[-1], ["launchctl", "bootstrap", "gui/501", str(path)])
+        self.assertIn(["launchctl", "bootstrap", "gui/501", str(path)], runner.calls)
         script = self.root / "data/open-desk.command"
-        self.assertIn("python -m hunt", script.read_text())
+        self.assertIn("/opt/homebrew/bin/uv run python -m hunt", script.read_text(encoding="utf-8"))
         self.assertTrue(script.stat().st_mode & 0o100)
+        self.assertTrue((self.root / "data/Hunt Desk.app/Contents/Info.plist").exists())
         self.assertIn("every 15 minutes", note)
 
     def test_install_without_uv_writes_nothing(self):
@@ -59,11 +63,16 @@ class LaunchdTests(unittest.TestCase):
 
     def test_a_launchctl_failure_removes_the_plist(self):
         with self.assertRaises(RuntimeError):
-            install(self.root, runner=Recorder(code=5), which=lambda name: "/usr/local/bin/uv", home=self.home, uid=501)
+            install(self.root, runner=FakeMac(fail=("launchctl",)), which=lambda name: "/usr/local/bin/uv", home=self.home, uid=501)
         self.assertEqual(list((self.home / "Library/LaunchAgents").glob("*.plist")), [])
 
+    def test_a_failed_app_build_does_not_fail_the_install(self):
+        note = install(self.root, runner=FakeMac(fail=("osacompile",)), which=lambda name: "/usr/local/bin/uv", home=self.home, uid=501)
+        self.assertIn("every 15 minutes", note)
+        self.assertTrue((self.root / "data/open-desk.command").exists())
+
     def test_uninstall_boots_out_and_deletes(self):
-        install(self.root, runner=Recorder(), which=lambda name: "/usr/local/bin/uv", home=self.home, uid=501)
+        install(self.root, runner=FakeMac(), which=lambda name: "/usr/local/bin/uv", home=self.home, uid=501)
         runner = Recorder()
         uninstall(self.root, runner=runner, home=self.home, uid=501)
         self.assertEqual(runner.calls[0][:2], ["launchctl", "bootout"])

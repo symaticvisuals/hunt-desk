@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import os
 import plistlib
-import shlex
 import shutil
 import subprocess
 from pathlib import Path
 
-from hunt import system
-from hunt.notify import OPEN_DESK
+from hunt import macapp, system
 
 INTERVAL_SECONDS = 900
 PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -55,10 +53,11 @@ def install(root: Path, *, runner=subprocess.run, which=shutil.which, home: Path
     if done.returncode != 0:
         path.unlink(missing_ok=True)
         raise RuntimeError(f"launchctl could not load the schedule: {(done.stderr or '').strip() or done.returncode}")
-    script = root / OPEN_DESK
-    script.parent.mkdir(parents=True, exist_ok=True)
-    script.write_text(f"#!/bin/sh\ncd {shlex.quote(str(root))} && {shlex.quote(uv)} run python -m hunt\n", encoding="utf-8")
-    script.chmod(0o755)
+    macapp.write_desk_script(root, uv)
+    try:
+        macapp.ensure(root, runner=runner, which=which)
+    except (RuntimeError, OSError):
+        pass
     return "The schedule is on. launchd checks every 15 minutes and runs only the boards that are due."
 
 
