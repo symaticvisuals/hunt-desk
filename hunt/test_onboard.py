@@ -114,6 +114,13 @@ class WindowsResumeTests(unittest.TestCase):
         self.assertEqual(runner.kwargs[0]["encoding"], "utf-8")
         self.assertEqual(runner.kwargs[0]["creationflags"], 0x08000000)
 
+    def test_a_localized_windows_picker_cannot_raise(self):
+        runner = Recorder(stdout="")
+        with patch("hunt.system.is_windows", return_value=True):
+            pick_resume_file(runner=runner)
+        self.assertEqual(runner.kwargs[0]["errors"], "replace")
+        self.assertIn("$ProgressPreference = 'SilentlyContinue'", base64.b64decode(runner.calls[0][-1]).decode("utf-16-le"))
+
     def test_a_cancelled_windows_picker_returns_none(self):
         with patch("hunt.system.is_windows", return_value=True):
             self.assertIsNone(pick_resume_file(runner=Recorder(stdout="")))

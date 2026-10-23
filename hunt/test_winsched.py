@@ -105,6 +105,18 @@ class TaskSchedulerTests(unittest.TestCase):
         self.assertEqual(registry.values, {})
         self.assertEqual(uninstall(self.root, runner=Recorder(code=1), registry=registry), "The schedule was not installed.")
 
+    def test_a_registry_error_does_not_fail_the_schedule(self):
+        _venv(self.root)
+        registry = FakeRegistry()
+
+        def refuse(*args):
+            raise PermissionError(5, "Access is denied")
+
+        registry.set = refuse
+        registry.delete_tree = refuse
+        self.assertIn("every 15 minutes", install(self.root, runner=Recorder(), which=lambda n: None, registry=registry))
+        self.assertEqual(uninstall(self.root, runner=Recorder(), registry=registry), "The schedule is off.")
+
     def test_installed_asks_task_scheduler(self):
         runner = Recorder()
         self.assertTrue(installed(self.root, runner=runner))

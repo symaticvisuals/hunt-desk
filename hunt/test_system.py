@@ -63,7 +63,7 @@ class SystemTests(unittest.TestCase):
         runner = Recorder()
         with patch("hunt.system.is_windows", return_value=False), patch("hunt.system.is_mac", return_value=True):
             open_path(Path("/tmp/r.pdf"), runner=runner)
-        self.assertEqual(runner.calls, [["open", "/tmp/r.pdf"]])
+        self.assertEqual(runner.calls, [["open", str(Path("/tmp/r.pdf"))]])
 
     def test_open_path_uses_startfile_on_windows(self):
         opened = []

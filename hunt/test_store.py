@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -187,6 +188,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual([r["url"] for r in new], ["https://l/new"])
         self.assertEqual(sorted(r["url"] for r in load_inbox(self.root)), ["https://l/new", "https://l/old"])
 
+    @unittest.skipIf(sys.platform == "win32", "Windows has no POSIX file modes")
     def test_write_json_keeps_the_file_mode(self):
         path = self.root / "data/mode.json"
         write_json(path, {"a": 1})

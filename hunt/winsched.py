@@ -91,13 +91,20 @@ def install(
         Path(path).unlink(missing_ok=True)
     if done.returncode != 0:
         raise RuntimeError(f"Task Scheduler could not add the schedule: {(done.stderr or '').strip() or done.returncode}")
-    winclick.ensure(root, which=which, registry=registry)
+    # A toast re-registers the click target, so a registry error here should not fail the schedule.
+    try:
+        winclick.ensure(root, which=which, registry=registry)
+    except OSError:
+        pass
     return "The schedule is on. Task Scheduler checks every 15 minutes and runs only the boards that are due."
 
 
 def uninstall(root: Path, *, runner=subprocess.run, registry: Registry | None = None) -> str:
     done = _schtasks(runner, ["/Delete", "/TN", task_name(root), "/F"])
-    winclick.remove(root, registry=registry)
+    try:
+        winclick.remove(root, registry=registry)
+    except OSError:
+        pass
     return "The schedule is off." if done.returncode == 0 else "The schedule was not installed."
 
 

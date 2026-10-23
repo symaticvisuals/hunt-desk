@@ -1,4 +1,5 @@
 import base64
+import re
 import subprocess
 import sys
 import tempfile
@@ -118,18 +119,37 @@ class WindowsToastTests(unittest.TestCase):
             item.start()
             self.addCleanup(item.stop)
 
-    def test_the_toast_escapes_text_and_links_to_the_desk(self):
+    def _toast(self, body: str) -> tuple[str, str]:
         runner = Recorder()
-        posted = post(self.root, "AT&T <Acme> O'Reilly \"x\" 🚀", runner=runner, registry=FakeRegistry(), which=lambda n: None)
+        posted = post(self.root, body, runner=runner, registry=FakeRegistry(), which=lambda n: None)
         self.assertTrue(posted.ok)
         self.assertEqual(runner.calls[0][0], "powershell.exe")
         script = base64.b64decode(runner.calls[0][-1]).decode("utf-16-le")
-        self.assertIn("AT&amp;T &lt;Acme&gt; O''Reilly &quot;x&quot; 🚀", script)
-        self.assertIn(f'launch="hunt-desk-{digest(self.root)}:open"', script)
+        literal = re.search(r"FromBase64String\('([A-Za-z0-9+/=]+)'\)", script)
+        self.assertIsNotNone(literal, script)
+        self.runner = runner
+        return script, base64.b64decode(literal.group(1)).decode("utf-8")
+
+    def test_the_toast_escapes_text_and_links_to_the_desk(self):
+        script, toast = self._toast("AT&T <Acme> O'Reilly \"x\" 🚀")
+        self.assertIn("<text>AT&amp;T &lt;Acme&gt; O'Reilly &quot;x&quot; 🚀</text>", toast)
+        self.assertIn(f'launch="hunt-desk-{digest(self.root)}:open"', toast)
         self.assertIn("$ErrorActionPreference = 'Stop'", script)
         self.assertIn("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe", script)
-        self.assertEqual(runner.kwargs[0]["creationflags"], 0x08000000)
-        self.assertEqual(runner.kwargs[0]["encoding"], "utf-8")
+        self.assertEqual(self.runner.kwargs[0]["creationflags"], 0x08000000)
+        self.assertEqual(self.runner.kwargs[0]["encoding"], "utf-8")
+
+    def test_scraped_text_never_becomes_powershell_code(self):
+        body = "Macy\u2019s \u2018x\u2019 \u201ay\u201b'; Start-Process calc; '"
+        script, toast = self._toast(body)
+        self.assertIn("Macy\u2019s \u2018x\u2019 \u201ay\u201b'; Start-Process calc; '", toast)
+        for mark in ("Macy", "Start-Process", "\u2018", "\u2019", "\u201a", "\u201b"):
+            self.assertNotIn(mark, script)
+
+    def test_localized_powershell_output_cannot_raise(self):
+        script, _ = self._toast("x")
+        self.assertEqual(self.runner.kwargs[0]["errors"], "replace")
+        self.assertIn("$ProgressPreference = 'SilentlyContinue'", script)
 
     def test_the_toast_registers_the_click_target(self):
         registry = FakeRegistry()

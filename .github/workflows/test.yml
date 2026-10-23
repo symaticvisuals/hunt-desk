@@ -34,6 +34,9 @@ jobs:
       - name: Schedule on, click target registered
         shell: pwsh
         run: |
+          # Quiet all day, so every tick the task runs exits before touching a board.
+          uv run python -c "from pathlib import Path; from hunt.schedule import save_quiet; save_quiet(Path('.').resolve(), '00:00', '23:59')"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           uv run python -m hunt schedule install
           if ($LASTEXITCODE -ne 0) { exit 1 }
           $task = uv run python -c "from pathlib import Path; from hunt.winsched import task_name; print(task_name(Path('.').resolve()))"
@@ -41,6 +44,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           $link = uv run python -c "from pathlib import Path; from hunt.winclick import scheme; print(scheme(Path('.').resolve()))"
           if (-not (Test-Path "HKCU:\Software\Classes\$link\shell\open\command")) { exit 1 }
+      - name: The task runs a tick through pythonw
+        shell: pwsh
+        run: |
+          $task = uv run python -c "from pathlib import Path; from hunt.winsched import task_name; print(task_name(Path('.').resolve()))"
+          schtasks /Run /TN $task
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          for ($i = 0; $i -lt 30; $i++) {
+            if ((Test-Path data\schedule.out) -and (Select-String -Path data\schedule.out -Pattern 'tick skipped: quiet hours' -Quiet)) { exit 0 }
+            Start-Sleep -Seconds 2
+          }
+          Get-Content data\schedule.out -ErrorAction SilentlyContinue
+          schtasks /Query /TN $task /V /FO LIST
+          exit 1
       - name: Toast
         run: uv run python -m hunt notify-test
       - name: Schedule off

@@ -212,7 +212,8 @@ def needs_onboarding(root: Path) -> bool:
     return len(text.strip()) < 80
 
 
-WINDOWS_PICKER = """[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+WINDOWS_PICKER = """$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms
 $dialog = New-Object System.Windows.Forms.OpenFileDialog
 $dialog.Title = 'Choose your resume'
@@ -225,7 +226,7 @@ def pick_resume_file(*, runner=subprocess.run) -> str | None:
     """The system file dialog. Returns a path, or None if the person cancels."""
     if system.is_windows():
         command = system.powershell(WINDOWS_PICKER, sta=True)
-        extra = system.no_window()
+        extra = {"errors": "replace", **system.no_window()}
     else:
         command = ["osascript", "-e", 'POSIX path of (choose file with prompt "Choose your resume")']
         extra = {}

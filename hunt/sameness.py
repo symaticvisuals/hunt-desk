@@ -75,7 +75,7 @@ def _text(role: Path) -> str:
 def measure(root: Path) -> Sameness:
     folder = root / "resumes"
     roles = sorted({path.parent for pattern in ("*/*/resume.json", "*/*/resume.md") for path in folder.glob(pattern)})
-    found = {str(role.relative_to(folder)): lines(_text(role)) for role in roles}
+    found = {role.relative_to(folder).as_posix(): lines(_text(role)) for role in roles}
     pairs = [Pair(first, second, shared_lines(found[first], found[second])) for first, second in itertools.combinations(found, 2)]
     pairs.sort(key=lambda pair: pair.shared, reverse=True)
     return Sameness(list(found), pairs)

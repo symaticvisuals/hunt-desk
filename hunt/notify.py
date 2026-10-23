@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import shutil
 import subprocess
 from pathlib import Path
@@ -65,16 +66,18 @@ def toast_script(title: str, body: str, link: str) -> str:
         f'<toast activationType="protocol" launch="{_xml(link)}:open"><visual><binding template="ToastGeneric">'
         f"<text>{_xml(title)}</text><text>{_xml(body)}</text></binding></visual></toast>"
     )
-    quoted = "'" + toast.replace("'", "''") + "'"
+    # Scraped text reaches PowerShell only as base64, so no quote in a title (curly ones included) can end a string.
+    payload = base64.b64encode(toast.encode("utf-8")).decode("ascii")
     # The catch prints a plain line, because an uncaught error under -EncodedCommand reaches stderr as CLIXML.
     return "\n".join(
         [
             "$ErrorActionPreference = 'Stop'",
+            "$ProgressPreference = 'SilentlyContinue'",
             "try {",
             "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null",
             "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null",
             "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument",
-            f"$xml.LoadXml({quoted})",
+            f"$xml.LoadXml([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{payload}')))",
             "$toast = New-Object Windows.UI.Notifications.ToastNotification $xml",
             "$toast.Tag = 'hunt'",
             "$toast.Group = 'hunt'",
@@ -99,6 +102,7 @@ def _post_windows(root: Path, title: str, body: str, runner, which, registry) ->
             capture_output=True,
             text=True,
             encoding="utf-8",
+            errors="replace",
             timeout=15,
             **system.no_window(),
         )
