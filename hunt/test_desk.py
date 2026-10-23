@@ -907,6 +907,19 @@ class ProcessAllTests(unittest.TestCase):
         _pilot(root, script)
 
 
+class TeardownTests(unittest.TestCase):
+    def test_a_highlight_that_arrives_while_the_desk_closes_is_ignored(self):
+        from types import SimpleNamespace
+
+        async def script(app, pilot):
+            await pilot.pause()
+            self.assertTrue(app.shown)
+            await app.query_one("#detail-kicker").remove()
+            app.on_data_table_row_highlighted(SimpleNamespace(cursor_row=0))
+
+        _pilot(_root(), script)
+
+
 class SettingsClassifierTests(unittest.TestCase):
     def _toggle(self, *, key: bool) -> tuple[list[str], list[str]]:
         from textual.widgets import Button

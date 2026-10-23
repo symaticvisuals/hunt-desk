@@ -12,6 +12,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.coordinate import Coordinate
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Input, Label, RichLog, Select, Static
 
@@ -916,7 +917,11 @@ class HuntApp(App):
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.cursor_row < 0 or event.cursor_row >= len(self.shown):
             return
-        self._show(self.shown[event.cursor_row])
+        try:
+            self._show(self.shown[event.cursor_row])
+        except NoMatches:
+            # A highlight queued while the desk closes arrives after the detail panel is gone.
+            return
 
     def _selected(self) -> dict | None:
         table = self.query_one("#jobs", DataTable)
