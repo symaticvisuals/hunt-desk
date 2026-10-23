@@ -117,7 +117,7 @@ def tailor_one(root: Path, job: dict, *, runner=subprocess.run) -> Tailored:
     try:
         output, problem = ask(
             root,
-            TAILOR_PROMPT.format(packet=(work / "job-full.json").relative_to(root)),
+            TAILOR_PROMPT.format(packet=(work / "job-full.json").relative_to(root).as_posix()),
             TAILOR_SCHEMA,
             log=str((work / "tailor.out").relative_to(root)),
             timeout=900,

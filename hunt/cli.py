@@ -232,7 +232,7 @@ def score_one(root: Path, job: dict, *, runner=subprocess.run, client=None) -> S
     packet_job = dict(job)
     packet_job["description"] = shorten(job.get("description") or "", limit=2200)
     (folder / "job.json").write_text(json.dumps(packet_job, indent=2), encoding="utf-8")
-    packet = (folder / "job.json").relative_to(root)
+    packet = (folder / "job.json").relative_to(root).as_posix()
     label = f"{job.get('company') or 'company'} — {job.get('title') or job.get('role') or 'role'}"
     try:
         output, problem = ask(
