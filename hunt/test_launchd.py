@@ -6,7 +6,6 @@ from pathlib import Path
 
 from hunt.launchd import build_plist, install, label, uninstall
 from hunt.test_macapp import FakeMac
-from hunt.notify import message, send
 
 
 class Recorder:
@@ -77,27 +76,3 @@ class LaunchdTests(unittest.TestCase):
         uninstall(self.root, runner=runner, home=self.home, uid=501)
         self.assertEqual(runner.calls[0][:2], ["launchctl", "bootout"])
         self.assertEqual(list((self.home / "Library/LaunchAgents").glob("*.plist")), [])
-
-
-class NotifyTests(unittest.TestCase):
-    def test_message_names_the_first_role(self):
-        jobs = [{"company": "Cisco", "title": "Forward Deployed Engineer"}, {"company": "Acme", "title": "AI Engineer"}, {"company": "B", "title": "C"}]
-        self.assertEqual(message(jobs[:1])[1], "1 new role worth a look · Cisco — Forward Deployed Engineer")
-        self.assertEqual(message(jobs)[1], "3 new roles worth a look · Cisco — Forward Deployed Engineer, +2")
-
-    def test_terminal_notifier_opens_the_desk_when_present(self):
-        root = Path(tempfile.mkdtemp())
-        (root / "data").mkdir()
-        (root / "data/open-desk.command").write_text("#!/bin/sh\n")
-        runner = Recorder()
-        send(root, [{"company": "Cisco", "title": "FDE"}], runner=runner, which=lambda name: "/opt/homebrew/bin/terminal-notifier")
-        call = runner.calls[0]
-        self.assertEqual(call[0], "/opt/homebrew/bin/terminal-notifier")
-        self.assertIn("-execute", call)
-
-    def test_osascript_is_the_fallback(self):
-        runner = Recorder()
-        send(Path(tempfile.mkdtemp()), [{"company": 'Say "Hi"', "title": "FDE"}], runner=runner, which=lambda name: None)
-        call = runner.calls[0]
-        self.assertEqual(call[:2], ["osascript", "-e"])
-        self.assertIn('Say \\"Hi\\"', call[2])

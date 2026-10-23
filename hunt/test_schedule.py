@@ -16,6 +16,7 @@ from hunt.schedule import (
     tick,
     window_cap,
 )
+from hunt.notify import Posted
 from hunt.search import SearchResult, UnitOutcome
 from hunt.sources import Job
 from hunt.store import Busy, load_inbox, run_lock, save_inbox
@@ -219,6 +220,12 @@ class TickTests(unittest.TestCase):
         self.assertEqual(self.notified, [["https://greenhouse.example/3"]])
         self.tick(now=later + timedelta(hours=5), collected=_collected(_job(1), _job(3)))
         self.assertEqual(len(self.notified), 1)
+
+    def test_a_banner_that_fell_back_is_logged(self):
+        self.tick(collected=_collected(_job(1)))
+        with patch("hunt.schedule.collect", return_value=_collected(_job(1), _job(3))):
+            tick(self.root, {}, now=NOON + timedelta(hours=5), classifier=self.classify, checker=lambda url: "open", notifier=lambda root, jobs: Posted(False, "osacompile broke"), rng=Fixed())
+        self.assertIn("notification fell back: osacompile broke", (self.root / "data/schedule.log").read_text(encoding="utf-8"))
 
     def test_a_run_prunes_old_roles_and_a_board_cannot_bring_them_back(self):
         (self.root / "profile/worth.json").write_text(json.dumps({"max_posted_days": 2}), encoding="utf-8")
@@ -426,9 +433,21 @@ class BatchPollTests(unittest.TestCase):
         with (
             patch("hunt.batch.open_batches", return_value=[{"id": "msgbatch_1"}]),
             patch("hunt.batch.poll", return_value=["Batch scored 4 roles: 2 above 75. Tailoring those now in a second batch."]),
-            patch("hunt.notify.post", side_effect=lambda root, body: posted.append(body)),
+            patch("hunt.notify.post", side_effect=lambda root, body: posted.append(body) or Posted(True)),
         ):
             result = tick(root, {}, now=NOON + timedelta(minutes=10))
         self.assertEqual(result.skipped, "nothing due")
         self.assertEqual(posted, ["Batch scored 4 roles: 2 above 75. Tailoring those now in a second batch."])
         self.assertIn("Batch scored 4 roles", (root / "data/schedule.log").read_text())
+
+    def test_a_batch_banner_that_fell_back_is_logged(self):
+        root = _root()
+        with patch("hunt.schedule.collect", return_value=_collected(_job(1))):
+            tick(root, {}, now=NOON, classifier=lambda jobs, report: None, checker=lambda url: "open", notifier=lambda r, j: None, rng=Fixed())
+        with (
+            patch("hunt.batch.open_batches", return_value=[{"id": "msgbatch_1"}]),
+            patch("hunt.batch.poll", return_value=["Batch scored 4 roles."]),
+            patch("hunt.notify.post", return_value=Posted(False, "x")),
+        ):
+            tick(root, {}, now=NOON + timedelta(minutes=10))
+        self.assertIn("notification fell back: x", (root / "data/schedule.log").read_text(encoding="utf-8"))

@@ -86,6 +86,17 @@ def cmd_tick(root: Path, args: list[str]) -> int:
     return 0
 
 
+def cmd_notify_test(root: Path) -> int:
+    from hunt.notify import post
+
+    posted = post(root, "Test banner. Click it to open the desk.", title="Job hunt")
+    if posted.ok:
+        print("Sent. Click the banner to check that it opens the desk.")
+        return 0
+    print(f"The banner fell back: {posted.reason}")
+    return 1
+
+
 def cmd_batch(root: Path) -> int:
     from hunt.batch import BatchError, open_batches, poll
 
@@ -739,6 +750,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_tick(root, argv[2:])
     if command == "batch":
         return cmd_batch(root)
+    if command == "notify-test":
+        return cmd_notify_test(root)
     if command == "schedule":
         return cmd_schedule(root, argv[2:])
     if command == "sources":
@@ -773,6 +786,6 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_tex_check(root)
     if command == "resume":
         return cmd_resume(root, argv[2:])
-    print("Commands: search, tick, schedule, batch, sources, last, cleanup, dedupe, classify, setup, overleaf, workflows, run, score, paths, sameness, funnel, seed, tex-check, resume")
+    print("Commands: search, tick, schedule, notify-test, batch, sources, last, cleanup, dedupe, classify, setup, overleaf, workflows, run, score, paths, sameness, funnel, seed, tex-check, resume")
     print("Run with no command to open the desk.")
     return 1
