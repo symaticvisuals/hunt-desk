@@ -1,6 +1,6 @@
 # Schedule
 
-The scraper runs in the background through launchd on macOS. Saving preferences in Step 2 turns it on. Turn it off or on again from Settings, or from a terminal:
+The scraper runs in the background through launchd on macOS and Task Scheduler on Windows. Saving preferences in Step 2 turns it on. Turn it off or on again from Settings, or from a terminal:
 
 ```sh
 uv run python -m hunt schedule install
@@ -8,7 +8,21 @@ uv run python -m hunt schedule status
 uv run python -m hunt schedule uninstall
 ```
 
-`install` writes `~/Library/LaunchAgents/com.hunt.tick.<hash>.plist`. The agent runs `uv run python -m hunt tick` every 15 minutes, and once at login. It also writes `data/open-desk.command`, which a notification click opens when `terminal-notifier` is installed (`brew install terminal-notifier`). Without it the banner has no click action.
+On a Mac, `install` writes `~/Library/LaunchAgents/com.hunt.tick.<hash>.plist`. The agent runs `uv run python -m hunt tick` every 15 minutes, and once at login. It also writes `data/open-desk.command` and builds `data/Hunt Desk.app`, a small AppleScript app that posts every banner. Because the banner belongs to Hunt Desk, a click relaunches it, and it opens `open-desk.command` in Terminal, which starts the desk on the main list. The first banner makes macOS ask whether Hunt Desk may send notifications; allow it once. A banner rebuilds the app if it is missing or the repo moved, so an older install picks this up without reinstalling. If the app cannot be built or started, the banner falls back to a plain AppleScript one with no click action, and `data/schedule.log` says why. `uv run python -m hunt notify-test` posts a test banner.
+
+## Windows
+
+`install` registers a Task Scheduler task named `hunt-tick-<hash>` for the current user. The task:
+
+- runs `.venv\Scripts\pythonw.exe -X utf8 -m hunt tick` every 15 minutes, from the repo folder. `pythonw` has no console, so no window opens, and Tectonic and PowerShell start without one too;
+- runs on battery, and keeps running when a laptop unplugs;
+- runs only while you are logged in, in your own session, so it needs no password or admin rights;
+- catches up on a run missed while the PC was off or asleep, which covers what launchd's run at login does;
+- skips a run while the last one is still going, and stops one after two hours.
+
+Output goes to `data/schedule.out`, the same as on a Mac. `install` also writes `data\open-desk.cmd` and registers a `hunt-desk-<hash>:` link for your user under `HKEY_CURRENT_USER\Software\Classes`. A toast click follows that link, which runs `open-desk.cmd` and opens the desk. The toast shows Windows PowerShell as its sender. `uninstall` removes the task and the link.
+
+The task runs the venv's Python directly, so it does not run `uv sync` the way `uv run` does on a Mac. After a `git pull` that adds a package, ticks fail until you open the desk or run `start.cmd` once.
 
 ## What a tick does
 
@@ -22,13 +36,13 @@ uv run python -m hunt schedule uninstall
 8. Sends roles above the cutoff that have no resume yet to a tailoring batch, then sends unscored roles on the main list to a scoring batch: clean roles first, then roles marked `?`, by classifier fit, then newest. Both stay inside the scoring cap.
 9. Records each board's result in `data/schedule.json` and writes a line per board to `data/schedule.log` (last 500 lines).
 10. Removes roles hidden as stale, posted too long ago, or closed from the inbox, and adds their URLs to `data/pruned.json` so a board that still lists one cannot add it again. Dismissed and applied roles stay, and so does a role scored above `screenout_cap` until it closes. Classifier decisions for URLs in neither the inbox nor `data/last-search.json` go too, and so do the posting copies in finished batches; a finished batch keeps its summary and the roles that failed. `hunt cleanup` runs the same prune by hand.
-11. Sends a macOS notification when a role reaches the main list for the first time. The very first run after install does not notify.
+11. Sends a notification when a role reaches the main list for the first time. Clicking it opens the desk. The very first run after install does not notify.
 
 A tick with no board due still does step 8.
 
 Every tick outside quiet hours also checks `data/batches.json`. A finished Batch API batch is applied at once (scores written, the tailoring batch sent, or tailored resumes written), even when no board is due, and a notification says what happened.
 
-A tick calls Claude only within the daily caps in `profile/preferences.json`, and never before those caps have been saved once. With both caps at 0, a tick never calls Claude. Spend is kept in `data/spend.json`. `data/schedule.out` catches anything launchd itself prints, such as a crash.
+A tick calls Claude only within the daily caps in `profile/preferences.json`, and never before those caps have been saved once. With both caps at 0, a tick never calls Claude. Spend is kept in `data/spend.json`. `data/schedule.out` catches anything the tick prints that is not in the log, such as a crash.
 
 ## Parallel work
 
